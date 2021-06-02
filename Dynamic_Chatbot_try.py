@@ -268,7 +268,7 @@ def main():
     parser.add_argument("--save_dir", type = str, default="model/")
     parser.add_argument("--dir_name", type = str, default="new") # persona selector model folder
     parser.add_argument("--load_model_path", type = str, default='')
-    parser.add_argument("--log_file", type = str, default=".record/record_new.txt")
+    parser.add_argument("--log_file", type = str, default="./record/record_new.txt")
     parser.add_argument("--log_step", type = int, default=2)
     parser.add_argument("--print_sample_step", type = int, default=20)
     parser.add_argument("--save_time_step", type = int, default=100)
@@ -299,14 +299,13 @@ def main():
     
     for i_epoch in range(args.epoch):
         i_batch = 0
-        prob_history = []
-        score_history = []
+        prob_record = []
+        score_record = []
         for input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids in train_loader:
             #===== select persona for interlocutor ========
             #===== generate s0 from dataset ===============            
             interlocutor_persona_enc = []
             history_enc = []
-            score_bt = 0
 
             for input_i in input_ids:
                 persona = []
@@ -364,7 +363,7 @@ def main():
                 persona_s2, log_prob = select_persona(persona_selector, persona_pool, history, bert_tokenizer, bert_model)
             else:
                 persona_s2, log_prob = random.sample(persona, args.batch_size), [0 for _ in range(args.batch_size)]
-            prob_history.append(log_prob)
+            prob_record.append(log_prob)
 
             #===== generate s2 ============================
             persona_enc = [tokenizer.encode_plus(p_i, return_attention_mask=False)['input_ids'] for p_i in persona_s2]
@@ -379,7 +378,7 @@ def main():
                 for i in range(args.batch_size):
                     history_enc[i].append(response_enc[i])
 
-            score_history.append( get_score([h[-2:] for h in history_enc], tokenizer))
+            score_record.append( get_score([h[-2:] for h in history_enc], tokenizer))
 
             #===== select persona for s4 ==================
             history = [[tokenizer.decode(s) for s in h[-selector_history:]] for h in history_enc ]
@@ -390,7 +389,7 @@ def main():
                     persona_s4, log_prob = random.sample(persona_pool, args.batch_size), [0 for _ in range(args.batch_size)]
             else:
                 persona_s4, log_prob = persona_s2, [0 for _ in range(args.batch_size)]
-            prob_history.append(log_prob)
+            prob_record.append(log_prob)
 
             #===== generate s4 ============================
             persona_enc = [tokenizer.encode_plus(p_i, return_attention_mask=False)['input_ids'] for p_i in persona_s4]
@@ -405,36 +404,34 @@ def main():
                 for i in range(args.batch_size):
                     history_enc[i].append(response_enc[i])
 
-            score_history.append( get_score([h[-2:] for h in history_enc], tokenizer))
+            score_record.append( get_score([h[-2:] for h in history_enc], tokenizer))
             
-
             # print('value_init\n', value_init)
-            # print('prob_history\n', prob_history)
-            # print('score_history\n', score_history)
+            # print('prob_record\n', prob_record)
+            # print('score_record\n', score_record)
 
-            rewards_ori = []
-            while True:
-                tmp_1 = []
-                tmp_0 = []
-                for i in range(args.batch_size):
-                    discounted_s4 = score_history[1][i] + args.delta * (score_history[1][i] - score_history[0][i])
-                    tmp_1.append(discounted_s4)
-                for i in range(args.batch_size):
-                    discounted_s2 = score_history[0][i] + args.delta * (score_history[0][i] - value_init[i]) + args.gamma * discounted_s4
-                    tmp_0.append(discounted_s2)
-                rewards_ori.append(tmp_0)
-                rewards_ori.append(tmp_1)
-                break
+            rewards_s4 = []
+            rewards_s2 = []
+            for i in range(args.batch_size):
+                r_s4 = score_record[1][i] + args.delta * (score_record[1][i] - score_record[0][i])
+                rewards_s4.append(r_s4)
+            for i in range(args.batch_size):
+                r_s2 = score_record[0][i] + args.delta * (score_record[0][i] - value_init[i]) + args.gamma * reward_s4
+                rewards_s2.append(r_s2)
+
             # print('rewards_ori\n', rewards_ori)
 
-            rewards_ori = torch.tensor(rewards_ori, device=arg.device)
+            rewards_ori = torch.tensor([rewards_s2, rewards_s4], device=arg.device)
             rewards = (rewards_ori - rewards_ori.mean()) / (rewards_ori.std() + 1e-9)
             loss = 0
             # print('rewards\n', rewards)
-            for r, l in zip(rewards, prob_history):
+            for r, l in zip(rewards, prob_record):
                 loss -= sum(r * l)
             
-            score = torch.sum(rewards_ori, dim=0).detach().cpu().numpy()
+            rewards_ori = rewards_ori.detach().cpu().numpy()
+            rw_2, rw_4 = np.sum(rewards_ori, axis=1)
+            sc_2, sc_4 = np.sum(score_record, axis=1)
+            sc_ori = np.sum(value_init)
 
             optimizer.zero_grad()
             persona_selector.train()
@@ -446,7 +443,11 @@ def main():
             if i_batch % args.log_step == 0:
                 niter = i_epoch*len(train_loader)+i_batch
                 writer.add_scalar('Train/Loss', loss, niter)
-                writer.add_scalar('Train/Score', np.mean(score), niter)
+                writer.add_scalar('Train/Score_origin', sc_ori, niter)
+                writer.add_scalar('Train/Score_s2', sc_2, niter)
+                writer.add_scalar('Train/Score_s4', sc_4, niter)
+                writer.add_scalar('Train/Reward_s2', rw_2, niter)
+                writer.add_scalar('Train/Reward_s4', rw_4, niter)
     
             if i_batch % args.print_sample_step == 0:
                 with open(args.log_file, 'a') as fp:
@@ -468,8 +469,8 @@ def main():
             if i_batch % args.save_time_step == 0:
                 torch.save(persona_selector, os.path.join(args.work_space, args.save_dir, args.dir_name, f"{i_epoch}_epoch.pkl"))
             
-            prob_history.clear()
-            score_history.clear()
+            prob_record.clear()
+            score_record.clear()
         torch.save(persona_selector, os.path.join(args.work_space, args.save_dir, args.dir_name, f"{i_epoch}_epoch.pkl"))
 if __name__ == "__main__":
     main()    
