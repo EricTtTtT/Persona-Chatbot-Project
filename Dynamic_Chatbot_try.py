@@ -247,23 +247,33 @@ def prepare_chatbot(check_point, bt=4, root='.'):
 
     return model, interlocutor, tokenizer, arg
 
+def get_score(history_enc_last_two, tokenizer):
+    query = []
+    reply = []
+    for history_enc_i in history_enc_last_two:
+        query.append(tokenizer.decode(history_enc_i[0]))
+        reply.append(tokenizer.decode(history_enc_i[1]))
+    score = analyze_engagement(query, reply)
+    return score
 
 def main():
     parser = ArgumentParser()
     parser.add_argument("--work_space", type = str, default=".")
     parser.add_argument("--model_checkpoint", type = str, default="model/gpt2_persona_model/")
-    parser.add_argument("--batch_size", type = int, default=32)
+    parser.add_argument("--batch_size", type = int, default=16)
     parser.add_argument("--epoch", type = int, default=1)
     parser.add_argument("--lr", type = float, default=1e-5)
+    parser.add_argument("--gamma", type = float, default=0.2)
+    parser.add_argument("--delta", type = float, default=0.6)
     parser.add_argument("--save_dir", type = str, default="model/")
-    parser.add_argument("--dir_name", type = str, default="bt32_lr1e-5") # persona selector model folder
+    parser.add_argument("--dir_name", type = str, default="new") # persona selector model folder
     parser.add_argument("--load_model_path", type = str, default='')
-    parser.add_argument("--log_file", type = str, default="record_bt32_lr1e-5.txt")
+    parser.add_argument("--log_file", type = str, default=".record/record_new.txt")
     parser.add_argument("--log_step", type = int, default=2)
     parser.add_argument("--print_sample_step", type = int, default=20)
     parser.add_argument("--save_time_step", type = int, default=100)
     parser.add_argument("--select", type = bool, default=True)
-    parser.add_argument("--fix", type = bool, default=True)
+    parser.add_argument("--fix", type = bool, default=False)
     
     args = parser.parse_args()
     os.makedirs(os.path.join(args.work_space, args.save_dir, args.dir_name), exist_ok=True)
@@ -289,12 +299,14 @@ def main():
     
     for i_epoch in range(args.epoch):
         i_batch = 0
+        prob_history = []
+        score_history = []
         for input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids in train_loader:
             #===== select persona for interlocutor ========
             #===== generate s0 from dataset ===============            
             interlocutor_persona_enc = []
             history_enc = []
-            score = 0
+            score_bt = 0
 
             for input_i in input_ids:
                 persona = []
@@ -343,13 +355,16 @@ def main():
                 for i in range(args.batch_size):
                     history_enc[i].append(response_enc[i])
 
+            value_init = get_score([h[-2:] for h in history_enc], tokenizer)
+
             #===== select persona for s2 ==================
             history = [[tokenizer.decode(s) for s in h[-selector_history:]] for h in history_enc ]
             
             if args.select:
                 persona_s2, log_prob = select_persona(persona_selector, persona_pool, history, bert_tokenizer, bert_model)
             else:
-                persona_s2 = random.sample(persona, args.batch_size)
+                persona_s2, log_prob = random.sample(persona, args.batch_size), [0 for _ in range(args.batch_size)]
+            prob_history.append(log_prob)
 
             #===== generate s2 ============================
             persona_enc = [tokenizer.encode_plus(p_i, return_attention_mask=False)['input_ids'] for p_i in persona_s2]
@@ -364,15 +379,18 @@ def main():
                 for i in range(args.batch_size):
                     history_enc[i].append(response_enc[i])
 
+            score_history.append( get_score([h[-2:] for h in history_enc], tokenizer))
+
             #===== select persona for s4 ==================
             history = [[tokenizer.decode(s) for s in h[-selector_history:]] for h in history_enc ]
             if not args.fix:
                 if args.select:
                     persona_s4, log_prob = select_persona(persona_selector, persona_pool, history, bert_tokenizer, bert_model)
                 else:
-                    persona_s4 = random.sample(persona_pool, args.batch_size)
+                    persona_s4, log_prob = random.sample(persona_pool, args.batch_size), [0 for _ in range(args.batch_size)]
             else:
-                persona_s4 = persona_s2
+                persona_s4, log_prob = persona_s2, [0 for _ in range(args.batch_size)]
+            prob_history.append(log_prob)
 
             #===== generate s4 ============================
             persona_enc = [tokenizer.encode_plus(p_i, return_attention_mask=False)['input_ids'] for p_i in persona_s4]
@@ -387,23 +405,36 @@ def main():
                 for i in range(args.batch_size):
                     history_enc[i].append(response_enc[i])
 
-            # print('\nhistory + s0, s1, s2, s3, s4, s5')
-            # for sen_enc in history_enc[0]:
-            #     print(tokenizer.decode(sen_enc))
+            score_history.append( get_score([h[-2:] for h in history_enc], tokenizer))
+            
 
-            s4 = []
-            s5 = []
-            for history_enc_i in history_enc:
-                s4.append(tokenizer.decode(history_enc_i[-2]))
-                s5.append(tokenizer.decode(history_enc_i[-1]))
+            # print('value_init\n', value_init)
+            # print('prob_history\n', prob_history)
+            # print('score_history\n', score_history)
 
-            score_ori = analyze_engagement(s4, s5)
-            score_ori = torch.tensor(score_ori, device=arg.device)
-            score = (score_ori - score_ori.mean()) / score_ori.std()
+            rewards_ori = []
+            while True:
+                tmp_1 = []
+                tmp_0 = []
+                for i in range(args.batch_size):
+                    discounted_s4 = score_history[1][i] + args.delta * (score_history[1][i] - score_history[0][i])
+                    tmp_1.append(discounted_s4)
+                for i in range(args.batch_size):
+                    discounted_s2 = score_history[0][i] + args.delta * (score_history[0][i] - value_init[i]) + args.gamma * discounted_s4
+                    tmp_0.append(discounted_s2)
+                rewards_ori.append(tmp_0)
+                rewards_ori.append(tmp_1)
+                break
+            # print('rewards_ori\n', rewards_ori)
+
+            rewards_ori = torch.tensor(rewards_ori, device=arg.device)
+            rewards = (rewards_ori - rewards_ori.mean()) / (rewards_ori.std() + 1e-9)
             loss = 0
-
-            loss += sum(score * log_prob)
-            score = list(score.detach().cpu().numpy())
+            # print('rewards\n', rewards)
+            for r, l in zip(rewards, prob_history):
+                loss -= sum(r * l)
+            
+            score = torch.sum(rewards_ori, dim=0).detach().cpu().numpy()
 
             optimizer.zero_grad()
             persona_selector.train()
@@ -411,21 +442,23 @@ def main():
             optimizer.step()
 
             i_batch += 1
+            print('loss', loss.item())
             if i_batch % args.log_step == 0:
                 niter = i_epoch*len(train_loader)+i_batch
-                print('loss', loss.item())
                 writer.add_scalar('Train/Loss', loss, niter)
-                writer.add_scalar('Train/Score', score_ori.mean(), niter)
+                writer.add_scalar('Train/Score', np.mean(score), niter)
     
             if i_batch % args.print_sample_step == 0:
                 with open(args.log_file, 'a') as fp:
                     fp.write("\n===== dialogue sample ======================\n")
+                    fp.write(f"persona_interlocutor :\n{tokenizer.decode(interlocutor_persona_enc[0])}\n")
                     fp.write(f"persona_s2: {persona_s2[0]}\n")
                     fp.write(f"persona_s4: {persona_s4[0]}\n")
                     fp.write(f"\nhistory + s1~s5 at {i_epoch} epoch {i_batch} batch\n")
                     for sen_enc in history_enc[0]:
                         fp.write(f"{tokenizer.decode(sen_enc)}\n")
                 print("===== print dialogue sample ==================")
+                print(f"\npersona_interlocutor :\n{tokenizer.decode(interlocutor_persona_enc[0])}\n")
                 print('\npersona_s2\n', persona_s2[0])
                 print('\npersona_s4\n', persona_s4[0])
                 print(f"\nhistory + s1~s5 at {i_epoch} epoch {i_batch} batch")
@@ -434,6 +467,9 @@ def main():
 
             if i_batch % args.save_time_step == 0:
                 torch.save(persona_selector, os.path.join(args.work_space, args.save_dir, args.dir_name, f"{i_epoch}_epoch.pkl"))
+            
+            prob_history.clear()
+            score_history.clear()
         torch.save(persona_selector, os.path.join(args.work_space, args.save_dir, args.dir_name, f"{i_epoch}_epoch.pkl"))
 if __name__ == "__main__":
     main()    
