@@ -208,7 +208,7 @@ def generate_response_bt(personality, history, tokenizer, model, arg, current_ou
 def prepare_chatbot(check_point, bt=4, root='.'):
     class ARG:
         def __init__(self):
-            self.dataset_path = os.path.join(root, 'data/')
+            self.dataset_path = os.path.join(root, 'data/personachat_self_original.json')
             self.dataset_cache = os.path.join(root, 'data/dataset_cache')
             self.max_history = 2
             self.num_candidates = 1
@@ -251,12 +251,12 @@ def prepare_chatbot(check_point, bt=4, root='.'):
 def main():
     parser = ArgumentParser()
     parser.add_argument("--work_space", type = str, default=".")
-    parser.add_argument("--model_checkpoint", type = str, default="transfer-learning-conv-ai/gpt2_persona_model/")
+    parser.add_argument("--model_checkpoint", type = str, default="model/gpt2_persona_model/")
     parser.add_argument("--batch_size", type = int, default=32)
     parser.add_argument("--epoch", type = int, default=1)
     parser.add_argument("--lr", type = float, default=1e-4)
-    parser.add_argument("--save_dir", type = str, default="model_PS/")
-    parser.add_argument("--dir_name", type = str, default="try_lr1e-4")
+    parser.add_argument("--save_dir", type = str, default="model/")
+    parser.add_argument("--dir_name", type = str, default="try_lr1e-4") # persona selector model folder
     parser.add_argument("--load_model_path", type = str, default='')
     parser.add_argument("--log_file", type = str, default="record_try_2.txt")
     parser.add_argument("--log_step", type = int, default=2)
