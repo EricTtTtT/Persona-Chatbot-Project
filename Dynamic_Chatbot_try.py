@@ -264,7 +264,7 @@ def main():
     parser.add_argument("--epoch", type = int, default=1)
     parser.add_argument("--lr", type = float, default=1e-5)
     parser.add_argument("--gamma", type = float, default=0.2)
-    parser.add_argument("--delta", type = float, default=0.6)
+    parser.add_argument("--delta", type = float, default=2.)
     parser.add_argument("--save_dir", type = str, default="model/")
     parser.add_argument("--dir_name", type = str, default="new") # persona selector model folder
     parser.add_argument("--load_model_path", type = str, default='')
