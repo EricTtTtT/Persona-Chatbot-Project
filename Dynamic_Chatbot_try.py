@@ -254,16 +254,16 @@ def main():
     parser.add_argument("--model_checkpoint", type = str, default="model/gpt2_persona_model/")
     parser.add_argument("--batch_size", type = int, default=32)
     parser.add_argument("--epoch", type = int, default=1)
-    parser.add_argument("--lr", type = float, default=1e-4)
+    parser.add_argument("--lr", type = float, default=1e-5)
     parser.add_argument("--save_dir", type = str, default="model/")
-    parser.add_argument("--dir_name", type = str, default="try_lr1e-4") # persona selector model folder
+    parser.add_argument("--dir_name", type = str, default="bt32_lr1e-5") # persona selector model folder
     parser.add_argument("--load_model_path", type = str, default='')
-    parser.add_argument("--log_file", type = str, default="record_try_2.txt")
+    parser.add_argument("--log_file", type = str, default="record_bt32_lr1e-5.txt")
     parser.add_argument("--log_step", type = int, default=2)
     parser.add_argument("--print_sample_step", type = int, default=20)
     parser.add_argument("--save_time_step", type = int, default=100)
     parser.add_argument("--select", type = bool, default=True)
-    parser.add_argument("--fix", type = bool, default=False)
+    parser.add_argument("--fix", type = bool, default=True)
     
     args = parser.parse_args()
     os.makedirs(os.path.join(args.work_space, args.save_dir, args.dir_name), exist_ok=True)
@@ -371,6 +371,8 @@ def main():
                     persona_s4, log_prob = select_persona(persona_selector, persona_pool, history, bert_tokenizer, bert_model)
                 else:
                     persona_s4 = random.sample(persona_pool, args.batch_size)
+            else:
+                persona_s4 = persona_s2
 
             #===== generate s4 ============================
             persona_enc = [tokenizer.encode_plus(p_i, return_attention_mask=False)['input_ids'] for p_i in persona_s4]
