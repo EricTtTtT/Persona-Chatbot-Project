@@ -205,11 +205,11 @@ def generate_response_bt(personality, history, tokenizer, model, arg, current_ou
 
     return current_output
 
-def prepare_chatbot(check_point, bt=4):
+def prepare_chatbot(check_point, bt=4, root='.'):
     class ARG:
         def __init__(self):
-            self.dataset_path = ''
-            self.dataset_cache = 'dataset_cache'
+            self.dataset_path = os.path.join(root, 'data/')
+            self.dataset_cache = os.path.join(root, 'data/dataset_cache')
             self.max_history = 2
             self.num_candidates = 1
             self.device = "cuda"
@@ -250,11 +250,12 @@ def prepare_chatbot(check_point, bt=4):
 
 def main():
     parser = ArgumentParser()
-    parser.add_argument("--model_checkpoint", type = str, default="/work/b07u1234/Engaging_Chatbot/transfer-learning-conv-ai/gpt2_persona_model/")
+    parser.add_argument("--work_space", type = str, default=".")
+    parser.add_argument("--model_checkpoint", type = str, default="transfer-learning-conv-ai/gpt2_persona_model/")
     parser.add_argument("--batch_size", type = int, default=32)
     parser.add_argument("--epoch", type = int, default=1)
     parser.add_argument("--lr", type = float, default=1e-4)
-    parser.add_argument("--save_dir", type = str, default="/work/b07u1234/Engaging_Chatbot/persona_selector_dir/")
+    parser.add_argument("--save_dir", type = str, default="model_PS/")
     parser.add_argument("--dir_name", type = str, default="try_lr1e-4")
     parser.add_argument("--load_model_path", type = str, default='')
     parser.add_argument("--log_file", type = str, default="record_try_2.txt")
@@ -265,10 +266,10 @@ def main():
     parser.add_argument("--fix", type = bool, default=False)
     
     args = parser.parse_args()
-    os.makedirs(args.save_dir + args.dir_name, exist_ok=True)
+    os.makedirs(os.path.join(args.work_space, args.save_dir, args.dir_name), exist_ok=True)
 
     #===== prepare dataset, models and optimizer ==========
-    model, interlocutor, tokenizer, arg = prepare_chatbot(args.model_checkpoint, bt=args.batch_size)
+    model, interlocutor, tokenizer, arg = prepare_chatbot(os.path.join(args.work_space, args.model_checkpoint), bt=args.batch_size)
     train_loader, val_loader, train_sampler, valid_sampler = get_data_loaders(arg, tokenizer)
     del val_loader, train_sampler, valid_sampler
     print('\n\nlen(train_loader): ', len(train_loader), '\n\n')
@@ -430,8 +431,8 @@ def main():
                     print(tokenizer.decode(sen_enc))
 
             if i_batch % args.save_time_step == 0:
-                torch.save(persona_selector, join(args.save_dir + args.dir_name, f"{i_epoch}_epoch.pkl"))
-        torch.save(persona_selector, join(args.save_dir + args.dir_name, f"{i_epoch}_epoch.pkl"))
+                torch.save(persona_selector, os.path.join(args.work_space, args.save_dir, args.dir_name, f"{i_epoch}_epoch.pkl"))
+        torch.save(persona_selector, os.path.join(args.work_space, args.save_dir, args.dir_name, f"{i_epoch}_epoch.pkl"))
 if __name__ == "__main__":
     main()    
     
