@@ -266,9 +266,8 @@ def main():
     parser.add_argument("--gamma", type = float, default=0.2)
     parser.add_argument("--delta", type = float, default=2.)
     parser.add_argument("--save_dir", type = str, default="model/")
-    parser.add_argument("--dir_name", type = str, default="new") # persona selector model folder
+    parser.add_argument("--model_name", type = str, default="new_b16_l-5_d2") # persona selector model folder
     parser.add_argument("--load_model_path", type = str, default='')
-    parser.add_argument("--log_file", type = str, default="./record/record_new.txt")
     parser.add_argument("--log_step", type = int, default=2)
     parser.add_argument("--print_sample_step", type = int, default=20)
     parser.add_argument("--save_time_step", type = int, default=100)
@@ -276,7 +275,8 @@ def main():
     parser.add_argument("--fix", type = bool, default=False)
     
     args = parser.parse_args()
-    os.makedirs(os.path.join(args.work_space, args.save_dir, args.dir_name), exist_ok=True)
+    os.makedirs(os.path.join(args.work_space, args.save_dir, args.model_name), exist_ok=True)
+    log_file_path = os.path.join(args.work_space, f"record/{args.model_name}.txt")
 
     #===== prepare dataset, models and optimizer ==========
     model, interlocutor, tokenizer, arg = prepare_chatbot(os.path.join(args.work_space, args.model_checkpoint), bt=args.batch_size)
@@ -410,16 +410,8 @@ def main():
             # print('prob_record\n', prob_record)
             # print('score_record\n', score_record)
 
-            rewards_s4 = []
-            rewards_s2 = []
-            for i in range(args.batch_size):
-                r_s4 = score_record[1][i] + args.delta * (score_record[1][i] - score_record[0][i])
-                rewards_s4.append(r_s4)
-            for i in range(args.batch_size):
-                r_s2 = score_record[0][i] + args.delta * (score_record[0][i] - value_init[i]) + args.gamma * reward_s4
-                rewards_s2.append(r_s2)
-
-            # print('rewards_ori\n', rewards_ori)
+            rewards_s4 = [score_record[1][i] + args.delta*(score_record[1][i] - score_record[0][i]) for i in range(args.batch_size)]
+            rewards_s2 = [score_record[0][i] + args.delta * (score_record[0][i] - value_init[i]) + args.gamma * rewards_s4[i] for i in range(args.batch_size)]
 
             rewards_ori = torch.tensor([rewards_s2, rewards_s4], device=arg.device)
             rewards = (rewards_ori - rewards_ori.mean()) / (rewards_ori.std() + 1e-9)
@@ -450,7 +442,7 @@ def main():
                 writer.add_scalar('Train/Reward_s4', rw_4, niter)
     
             if i_batch % args.print_sample_step == 0:
-                with open(args.log_file, 'a') as fp:
+                with open(log_file_path, 'a') as fp:
                     fp.write("\n===== dialogue sample ======================\n")
                     fp.write(f"persona_interlocutor :\n{tokenizer.decode(interlocutor_persona_enc[0])}\n")
                     fp.write(f"persona_s2: {persona_s2[0]}\n")
@@ -467,11 +459,11 @@ def main():
                     print(tokenizer.decode(sen_enc))
 
             if i_batch % args.save_time_step == 0:
-                torch.save(persona_selector, os.path.join(args.work_space, args.save_dir, args.dir_name, f"{i_epoch}_epoch.pkl"))
+                torch.save(persona_selector, os.path.join(args.work_space, args.save_dir, args.model_name, f"{i_epoch}_epoch.pkl"))
             
             prob_record.clear()
             score_record.clear()
-        torch.save(persona_selector, os.path.join(args.work_space, args.save_dir, args.dir_name, f"{i_epoch}_epoch.pkl"))
+        torch.save(persona_selector, os.path.join(args.work_space, args.save_dir, args.model_name, f"{i_epoch}_epoch.pkl"))
 if __name__ == "__main__":
     main()    
     
