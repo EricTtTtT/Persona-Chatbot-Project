@@ -10,3 +10,7 @@ put model and data folder in this repo
 
 Usage:  
 python3 Dynamic_Chatbot_try.py  
+
+TODO:  
+make Dynamic_Chatbot_try.py function generate_response_bt work  
+current method is generating response via for loop of sample_response  
