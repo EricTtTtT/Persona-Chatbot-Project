@@ -18,7 +18,7 @@ class PersonaSelector(nn.Module):
 
         # not using dropout for RL training stability
         self.id_selector = nn.Sequential(
-            nn.Linear(768*selector_history, 6732)
+            nn.Linear(768, 6732)
         )
 
     def forward(self, x):
@@ -64,43 +64,63 @@ def select_persona(persona_selector, persona_pool, history_sentences, tokenizer,
         persona_selector.train()
     persona_selector.to(device)
     model.to(device)
-    model.eval()
-    # print("history_sentences is \n :", history_sentences)
-    # print("np.shape(history_sentences) is", np.shape(history_sentences))
-    encoded_input = []
-    for sentences in history_sentences:
-        dialogue_enc = []
-        pad_len = selector_history - len(sentences)
-        if pad_len > 0:
-            warnings.warn(f"Warning: history size {len(sentences)} is shorter than {selector_history}.")
-            for i in range(pad_len):
-                dialogue_enc.append([0 for _ in range(32)])
-
-        for sen in sentences:
-            enc = tokenizer.encode_plus(
-                text = sen,
-                add_special_tokens=True,
-                max_length = 32,
-                pad_to_max_length = True,
-                return_attention_mask = False
-            )
-            dialogue_enc.append(enc['input_ids'])
-        encoded_input.append(dialogue_enc)
-    
-    encoded_input = torch.tensor(encoded_input, device = device)
-    ps_input_arr = []
-    for dialogue in encoded_input:
-        logits = model(dialogue)
-        if isinstance(logits, tuple):
-            # logits = logits[0]
-            temp = logits[0]
-        ps_input = torch.mean(temp, 1).squeeze(1)
-        ps_input = torch.cat(tuple(ps_input), 0)
-        ps_input_arr.append(ps_input)
-        
-    ps_input_arr = torch.stack(tuple(ps_input_arr)).to(torch.device(device))
-    persona_id, log_prob, entropy = persona_selector(ps_input_arr)
+    model.train()
+   # print(history_sentences)
+    total = []
+    for i in range(len(history_sentences)):
+        temp = '[CLS] '
+        for s in history_sentences[i]:
+            temp += s + ' [SEP] '
+        total.append(temp)
+    encode_input = tokenizer(total, add_special_tokens=False, truncation=True, padding=True, return_tensors="pt").to(device)
+    output = model(**encode_input)
+    prob = F.softmax(output[0], dim=-1)
+    distribution = Categorical(prob)
+    persona_id = distribution.sample()
+    log_prob = distribution.log_prob(persona_id)
+    #persona_id, log_prob, entropy = persona_selector(output[1])
     selected_persona = [persona_pool[id] for id in persona_id]
+    #     #history_sentences[i] = [x + ' [SEP] ' for x in hi]
+    # # print("history_sentences is \n :", history_sentences)
+    # # print("np.shape(history_sentences) is", np.shape(history_sentences))
+    # encoded_input = []
+    # for sentences in history_sentences:
+    #     dialogue_enc = []
+    #     pad_len = selector_history - len(sentences)
+    #     # if pad_len > 0:
+    #     #     warnings.warn(f"Warning: history size {len(sentences)} is shorter than {selector_history}.")
+    #     #     for i in range(pad_len):
+    #     #         dialogue_enc.append([0 for _ in range(40)])
+    #     for sen in sentences:
+    #         enc = tokenizer.encode_plus(
+    #             text = sen,
+    #             add_special_tokens=True,
+    #             max_length = 40,
+    #             pad_to_max_length = True,
+    #             return_attention_mask = False
+    #         )
+    #         dialogue_enc.append(enc['input_ids'])
+    #     encoded_input.append(dialogue_enc)
+    
+    # encoded_input = torch.tensor(encoded_input, device = device)
+    # ps_input_arr = []
+    # for dialogue in encoded_input:
+    #     logits = model(dialogue)
+    #     #log = model(input_ids=dialogue, return_dict=True)
+    #     if isinstance(logits, tuple):
+    #         # logits = logits[0]
+    #         temp = logits[0]
+
+    #     ps_input = torch.mean(temp, 1).squeeze(1)
+    #    # print(torch.equal(ps_input, logits[1]))
+    #     print(ps_input.shape)
+    #     ps_input = torch.cat(tuple(ps_input), 0)
+    #     print(ps_input.shape)
+    #     ps_input_arr.append(ps_input)
+        
+    # ps_input_arr = torch.stack(tuple(ps_input_arr)).to(torch.device(device))
+    # persona_id, log_prob, entropy = persona_selector(ps_input_arr)
+    # selected_persona = [persona_pool[id] for id in persona_id]
     # print('selected persona:\n', selected_persona)
    
     return selected_persona, log_prob

@@ -73,12 +73,14 @@ def get_data_loaders(args, tokenizer):
 
     logger.info("Build inputs and labels")
     datasets = {"train": defaultdict(list), "valid": defaultdict(list)}
+    
     for dataset_name, dataset in personachat.items():
         num_candidates = len(dataset[0]["utterances"][0]["candidates"])
         if args.num_candidates > 0 and dataset_name == 'train':
             num_candidates = min(args.num_candidates, num_candidates)
         for dialog in dataset:
             persona = dialog["personality"].copy()
+            persona = [persona[0]]
             for _ in range(args.personality_permutations):
                 for utterance in dialog["utterances"]:
                     history = utterance["history"][-(2*args.max_history+1):]
@@ -89,6 +91,7 @@ def get_data_loaders(args, tokenizer):
                             datasets[dataset_name][input_name].append(input_array)
                     datasets[dataset_name]["mc_labels"].append(num_candidates - 1)
                     datasets[dataset_name]["n_candidates"] = num_candidates
+                #persona = [persona[0]]
                 persona = [persona[-1]] + persona[:-1]  # permuted personalities
 
     logger.info("Pad inputs and convert to Tensor")
