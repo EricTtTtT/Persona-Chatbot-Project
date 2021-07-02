@@ -1,6 +1,9 @@
 # Persona-Chatbot-Project
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
+* VS-Code:  
+ctrl+k, ctrl+0 to fold all block
+
 ## Prepare:  
 download folling files  
 https://drive.google.com/file/d/1m2jk6NdhTEHVzQn3GTAtE3-CKYv1m658/view?usp=sharing  
