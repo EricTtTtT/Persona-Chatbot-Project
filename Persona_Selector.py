@@ -11,15 +11,13 @@ from transformers import BertTokenizer, BertModel
 device = torch.device("cuda:0")
 selector_history = 5
 
-#===== Pytorch Model definition ======================
+# ===== Pytorch Model definition ======================
 class PersonaSelector(nn.Module):
     def __init__(self):
         super(PersonaSelector, self).__init__()
 
         # not using dropout for RL training stability
-        self.id_selector = nn.Sequential(
-            nn.Linear(768, 6732)
-        )
+        self.id_selector = nn.Sequential(nn.Linear(768, 6732))
 
     def forward(self, x):
         x = self.id_selector(x)
@@ -30,55 +28,65 @@ class PersonaSelector(nn.Module):
         log_prob = distribution.log_prob(persona_id)
         return persona_id.cpu().detach().numpy(), log_prob, entropy
 
-def prepare_persona_selector(load_path=''):
-    #==========Training Prepare===========================
+
+def prepare_persona_selector(load_path=""):
+    # ==========Training Prepare===========================
     persona_selector = PersonaSelector()
-    if load_path != '':
+    if load_path != "":
         persona_selector = torch.load(load_path)
     persona_selector.cuda()
     persona_selector.train()
     persona_selector.id_selector.train()
-    
-    #==========setting IO=================================
-    persona_data_path = './data/personachat_self_original.json'
+
+    # ==========setting IO=================================
+    persona_data_path = "./data/personachat_self_original.json"
     persona_data_file = open(persona_data_path)
     persona_data = json.load(persona_data_file)
 
-    #==========read persona sentences=====================
-    data_type_list = ['train', 'valid']
+    # ==========read persona sentences=====================
+    data_type_list = ["train", "valid"]
     persona_set = set()
     for data_type in data_type_list:
         count = 0
         for i in range(len(persona_data[data_type])):
-            count += len(persona_data[data_type][i]['personality'])
-            for i_sentence in persona_data[data_type][i]['personality']:
+            count += len(persona_data[data_type][i]["personality"])
+            for i_sentence in persona_data[data_type][i]["personality"]:
                 persona_set.add(i_sentence)
-        print(data_type, 'data size: ', count)
-    print('total # of persona: ', len(persona_set))
+        print(data_type, "data size: ", count)
+    print("total # of persona: ", len(persona_set))
     persona_pool = sorted(list(persona_set))
 
     return persona_selector, persona_pool
 
-def select_persona(persona_selector, persona_pool, history_sentences, tokenizer, model, valid=False):
+
+def select_persona(
+    persona_selector, persona_pool, history_sentences, tokenizer, model, valid=False
+):
     if not valid:
         persona_selector.train()
     persona_selector.to(device)
     model.to(device)
     model.train()
-   # print(history_sentences)
+    # print(history_sentences)
     total = []
     for i in range(len(history_sentences)):
-        temp = '[CLS] '
+        temp = "[CLS] "
         for s in history_sentences[i]:
-            temp += s + ' [SEP] '
+            temp += s + " [SEP] "
         total.append(temp)
-    encode_input = tokenizer(total, add_special_tokens=False, truncation=True, padding=True, return_tensors="pt").to(device)
+    encode_input = tokenizer(
+        total,
+        add_special_tokens=False,
+        truncation=True,
+        padding=True,
+        return_tensors="pt",
+    ).to(device)
     output = model(**encode_input)
     prob = F.softmax(output[0], dim=-1)
     distribution = Categorical(prob)
     persona_id = distribution.sample()
     log_prob = distribution.log_prob(persona_id)
-    #persona_id, log_prob, entropy = persona_selector(output[1])
+    # persona_id, log_prob, entropy = persona_selector(output[1])
     selected_persona = [persona_pool[id] for id in persona_id]
     #     #history_sentences[i] = [x + ' [SEP] ' for x in hi]
     # # print("history_sentences is \n :", history_sentences)
@@ -101,7 +109,7 @@ def select_persona(persona_selector, persona_pool, history_sentences, tokenizer,
     #         )
     #         dialogue_enc.append(enc['input_ids'])
     #     encoded_input.append(dialogue_enc)
-    
+
     # encoded_input = torch.tensor(encoded_input, device = device)
     # ps_input_arr = []
     # for dialogue in encoded_input:
@@ -117,16 +125,16 @@ def select_persona(persona_selector, persona_pool, history_sentences, tokenizer,
     #     ps_input = torch.cat(tuple(ps_input), 0)
     #     print(ps_input.shape)
     #     ps_input_arr.append(ps_input)
-        
+
     # ps_input_arr = torch.stack(tuple(ps_input_arr)).to(torch.device(device))
     # persona_id, log_prob, entropy = persona_selector(ps_input_arr)
     # selected_persona = [persona_pool[id] for id in persona_id]
     # print('selected persona:\n', selected_persona)
-   
+
     return selected_persona, log_prob
 
 
-#===== testing functions =============================
+# ===== testing functions =============================
 # tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 # model = BertModel.from_pretrained('bert-base-uncased')
 # persona_selector, persona_pool = prepare_persona_selector()
