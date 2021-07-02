@@ -77,6 +77,7 @@ def make_logdir(model_name: str):
     )
     return logdir
 
+
 def top_filtering(
     logits, top_k=0.0, top_p=0.9, threshold=-float("Inf"), filter_value=-float("Inf")
 ):

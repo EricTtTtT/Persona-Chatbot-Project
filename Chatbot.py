@@ -48,6 +48,7 @@ from tensorboardX import SummaryWriter
 writer = SummaryWriter("runs")
 SPECIAL_TOKENS = ["<bos>", "<|eos|>", "<speaker1>", "<speaker2>", "<pad>"]
 
+
 def generate_response(personality, history, tokenizer, model, arg, current_output=None):
     special_tokens_ids = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)
 
