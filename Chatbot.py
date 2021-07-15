@@ -93,8 +93,6 @@ def generate_response(personality, history, tokenizer, model, arg, current_outpu
         [torch.LongTensor(x) for x in mass], batch_first=True, padding_value=0
     ).to(arg.device)
 
-    reply_position = [len(seq) for seq in sequence_bt]
-
     _, past = model(sequence_bt, attention_mask=mask, token_type_ids=token_type_ids_bt)
     token_tp = torch.LongTensor(
         [[speaker2] if len(x) % 2 else [speaker1] for x in history]
