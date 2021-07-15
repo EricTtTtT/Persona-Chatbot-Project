@@ -25,8 +25,8 @@ from tensorboardX import SummaryWriter
 
 from Chatbot import prepare_chatbot, get_score
 
-device_0 = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-device_1 = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+# device_0 = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+# device_1 = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 writer = SummaryWriter("runs")
 SPECIAL_TOKENS = ["<bos>", "<|eos|>", "<speaker1>", "<speaker2>", "<pad>"]
@@ -39,10 +39,10 @@ def generate_response(history, tokenizer, model, args, current_output=None):
     Generate response without persona.
     """
     special_tokens_ids = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)
-
+    print("special_tokens_ids", special_tokens_ids)
     bos, eos, spk1, spk2, pad = special_tokens_ids
     if current_output is None:
-        current_output = [[] for _ in range(arg.train_batch_size)]
+        current_output = [[] for _ in range(args.train_batch_size)]
 
     sequence_bt = [[[bos]] + history_i for history_i in history]
     sequence_bt = [
@@ -75,6 +75,8 @@ def generate_response(history, tokenizer, model, args, current_output=None):
         [torch.LongTensor(x) for x in mass], batch_first=True, padding_value=0
     ).to(args.device)
 
+    print("###################### sequence_bt")
+    print(sequence_bt[0])
     _, past = model(sequence_bt, attention_mask=mask, token_type_ids=token_type_ids_bt)
     token_tp = torch.LongTensor([[spk2] if len(x) % 2 else [spk1] for x in history]).to(
         args.device
@@ -82,19 +84,25 @@ def generate_response(history, tokenizer, model, args, current_output=None):
     prev = torch.LongTensor([[spk2] if len(x) % 2 else [spk1] for x in history]).to(
         args.device
     )
+    print("###################### prev")
+    print(prev[0])
 
     temp_sen = [[] for i in range(len(history))]
     for i_word in range(args.max_length):
-
         logits, past = model(prev, token_type_ids=token_tp, past=past)
+        print(f"logits.shape {logits.shape}")
+
         logits = logits.squeeze(0).squeeze(1)
-        # logits = top_filtering(logits, top_k=arg.top_k, top_p=arg.top_p)
         probs = torch.softmax(logits, dim=-1)
 
         prev = torch.multinomial(probs, num_samples=1)
-        # prev = [torch.topk(prob_i, 1)[1] if arg.no_sample else torch.multinomial(prob_i, 1) for prob_i in probs]
+        print("prev")
+        print(prev)
+
         for prev_i, prob_i in zip(prev, probs):
             if i_word < args.min_length and prev_i.item() in special_tokens_ids:
+                count = 0
+
                 while prev_i.item() in special_tokens_ids:
                     if prob_i.max().item() == 1:
                         warnings.warn(
@@ -102,7 +110,8 @@ def generate_response(history, tokenizer, model, args, current_output=None):
                         )
                         break  # avoid infinitely looping over special token
                     prev_i = torch.multinomial(prob_i, num_samples=1)
-
+                    count += 1
+                    print(f"{count}: {prev_i}")
         if i_word == 0:
             for j in range(len(history)):
                 temp_sen[j].append(prev[j].item())
@@ -119,6 +128,7 @@ def generate_response(history, tokenizer, model, args, current_output=None):
     for i in range(len(temp_sen)):
         if temp_sen[i][-1] == eos:
             temp_sen[i][:] = temp_sen[i][:-1]
+    print("temp_sen", temp_sen[0])
     return temp_sen
 
 
@@ -172,18 +182,17 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
                         history.append(sen)
                         break
                 history_enc.append(history)
-            print("######################")
-            print("history init")
+            print("######################  history init")
+            history_enc = [h[:-1] for h in history_enc]
             for sen_enc in history_enc[0]:
                 print(tokenizer.decode(sen_enc))
 
             # ===== generate s1 from chatbot ==========
-            with torch.no_grad():
-                response_enc = generate_response(
-                    history_enc, tokenizer, chatbot, args_bot
-                )
-                for i in range(args.batch_size):
-                    history_enc[i].append(response_enc[i])
+            response_enc = generate_response(history_enc, tokenizer, chatbot, args_bot)
+            print("###################### s1")
+            print(tokenizer.decode(response_enc[0]))
+            for i in range(args.batch_size):
+                history_enc[i].append(response_enc[i])
 
             score_bot = get_score([h[-2:] for h in history_enc], tokenizer)
 
