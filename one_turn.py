@@ -33,10 +33,11 @@ SPECIAL_TOKENS = ["<bos>", "<|eos|>", "<speaker1>", "<speaker2>", "<pad>"]
 
 temperature = 1
 
+
 def generate_response(history, tokenizer, model, args, current_output=None):
-    '''
+    """
     Generate response without persona.
-    '''
+    """
     special_tokens_ids = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)
 
     bos, eos, spk1, spk2, pad = special_tokens_ids
@@ -64,26 +65,26 @@ def generate_response(history, tokenizer, model, args, current_output=None):
         [torch.LongTensor(x) for x in sequence_bt],
         batch_first=True,
         padding_value=tokenizer.encode("<pad>")[0],
-    ).to(arg.device)
+    ).to(args.device)
     token_type_ids_bt = pad_sequence(
         [torch.LongTensor(x) for x in token_type_ids_bt],
         batch_first=True,
         padding_value=spk1,
-    ).to(arg.device)
+    ).to(args.device)
     mask = pad_sequence(
         [torch.LongTensor(x) for x in mass], batch_first=True, padding_value=0
-    ).to(arg.device)
+    ).to(args.device)
 
     _, past = model(sequence_bt, attention_mask=mask, token_type_ids=token_type_ids_bt)
-    token_tp = torch.LongTensor(
-        [[spk2] if len(x) % 2 else [spk1] for x in history]
-    ).to(arg.device)
-    prev = torch.LongTensor(
-        [[spk2] if len(x) % 2 else [spk1] for x in history]
-    ).to(arg.device)
+    token_tp = torch.LongTensor([[spk2] if len(x) % 2 else [spk1] for x in history]).to(
+        args.device
+    )
+    prev = torch.LongTensor([[spk2] if len(x) % 2 else [spk1] for x in history]).to(
+        args.device
+    )
 
     temp_sen = [[] for i in range(len(history))]
-    for i_word in range(arg.max_length):
+    for i_word in range(args.max_length):
 
         logits, past = model(prev, token_type_ids=token_tp, past=past)
         logits = logits.squeeze(0).squeeze(1)
@@ -93,7 +94,7 @@ def generate_response(history, tokenizer, model, args, current_output=None):
         prev = torch.multinomial(probs, num_samples=1)
         # prev = [torch.topk(prob_i, 1)[1] if arg.no_sample else torch.multinomial(prob_i, 1) for prob_i in probs]
         for prev_i, prob_i in zip(prev, probs):
-            if i_word < arg.min_length and prev_i.item() in special_tokens_ids:
+            if i_word < args.min_length and prev_i.item() in special_tokens_ids:
                 while prev_i.item() in special_tokens_ids:
                     if prob_i.max().item() == 1:
                         warnings.warn(
@@ -121,7 +122,7 @@ def generate_response(history, tokenizer, model, args, current_output=None):
     return temp_sen
 
 
-def train(chatbot, interlocutor, tokenizer, train_loader, args):
+def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
     optimizer = AdamW(chatbot.parameters(), lr=1e-5, eps=1e-5)
     scheduler = get_linear_schedule_with_warmup(
         optimizer, num_warmup_steps=500, num_training_steps=8000
@@ -140,7 +141,7 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args):
         for input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids in tqdm(
             train_loader
         ):
-            #===== set up history ===============
+            # ===== set up history ===============
             # interlocutor_persona_enc = []
             history_enc = []
             for input_i in input_ids:
@@ -171,14 +172,16 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args):
                         history.append(sen)
                         break
                 history_enc.append(history)
-            print('######################')
-            print('history init')
+            print("######################")
+            print("history init")
             for sen_enc in history_enc[0]:
                 print(tokenizer.decode(sen_enc))
 
             # ===== generate s1 from chatbot ==========
             with torch.no_grad():
-                response_enc = generate_response(history_enc, tokenizer, chatbot, args)
+                response_enc = generate_response(
+                    history_enc, tokenizer, chatbot, args_bot
+                )
                 for i in range(args.batch_size):
                     history_enc[i].append(response_enc[i])
 
@@ -186,7 +189,9 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args):
 
             # ===== generate s2 from interlocutor ==========
             with torch.no_grad():
-                response_enc = generate_response(history_enc, tokenizer, interlocutor, args)
+                response_enc = generate_response(
+                    history_enc, tokenizer, interlocutor, args_bot
+                )
                 for i in range(args.batch_size):
                     history_enc[i].append(response_enc[i])
 
@@ -209,12 +214,9 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args):
                 writer.add_scalar("Train/score", score, niter)
             if i_batch % args.save_time_step == 0:
                 chatbot.save_pretrained(
-                    os.path.join(
-                        args.work_space,
-                        args.save_dir,
-                        args.model_name
-                    ),
+                    os.path.join(args.work_space, args.save_dir, args.model_name),
                 )
+
 
 def main():
     parser = ArgumentParser()
@@ -225,8 +227,10 @@ def main():
     parser.add_argument("--epoch", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--save_dir", type=str, default="model/")
-    parser.add_argument("--model_name", type=str, default="one")  # persona selector model folder
-    
+    parser.add_argument(
+        "--model_name", type=str, default="one"
+    )  # persona selector model folder
+
     # steps
     parser.add_argument("--log_step", type=int, default=2)
     parser.add_argument("--print_sample_step", type=int, default=20)
@@ -237,17 +241,18 @@ def main():
         os.path.join(args.work_space, args.save_dir, args.model_name), exist_ok=True
     )
 
-    #===== prepare dataset, models and optimizer ==========
-    chatbot, interlocutor, tokenizer, arg = prepare_chatbot(
-        'gpt2', bt=args.batch_size
+    # ===== prepare dataset, models and optimizer ==========
+    chatbot, interlocutor, tokenizer, args_bot = prepare_chatbot(
+        "gpt2", bt=args.batch_size
     )
     train_loader, val_loader, train_sampler, valid_sampler = get_data_loaders(
-        arg, tokenizer
+        args_bot, tokenizer
     )
     del val_loader, train_sampler, valid_sampler
     print("\n\nlen(train_loader): ", len(train_loader), "\n\n")
 
-    train(chatbot, interlocutor, tokenizer, train_loader, args)
+    train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot)
+
 
 if __name__ == "__main__":
     main()
