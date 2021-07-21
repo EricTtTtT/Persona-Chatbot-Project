@@ -50,46 +50,37 @@ def generate_response(
     """
     eos_id = tokenizer.eos_token_id
     bt = args.train_batch_size
-    input_ids, attention_masks, token_type_ids = batch
+    input_ids, attention_masks = batch
 
     if current_output is None:
         current_output = [[] for _ in range(bt)]
-    _, past = model(
-        input_ids.to(args.device), attention_mask=attention_masks.to(args.device), token_type_ids=token_type_ids
-    )
+    _, past = model(input_ids.to(args.device), attention_mask=attention_masks.to(args.device))
 
-    print(token_type_ids.shape)
-    print(token_type_ids[0])
-    token_tp = torch.LongTensor([[0] for _ in range(bt)]).to(
-        args.device
-    )
     prev = torch.LongTensor([[tokenizer.eos_token_id] for _ in range(bt)]).to(
         args.device
     )
     temp_sen = [[] for i in range(bt)]
-    # print("##########")
-    # print(tokenizer.decode(input_ids[0]))
+
     for i_word in range(args.max_length):
-        logits, past = model(prev, token_type_ids=token_tp, past=past)
+        logits, past = model(prev, past=past)
         logits = logits.squeeze(0).squeeze(1)
         probs = torch.softmax(logits, dim=-1)
 
-        prev = torch.multinomial(probs,to num_samples=1)
+        prev = torch.multinomial(probs, num_samples=1)
 
         if i_word == 0:
             for j in range(bt):
                 temp_sen[j].append(prev[j].item())
             continue
-        flag = 1
 
+        flag = 1
         for j in range(0, bt):
             if temp_sen[j][-1] != eos_id:
                 flag = 0
                 temp_sen[j].append(prev[j].item())
         if flag == 1:
             break
-    # print("#####")
-    # print(tokenizer.decode(temp_sen[0]))
+
     for i in range(bt):
         if temp_sen[i][-1] == eos_id:
             temp_sen[i][:] = temp_sen[i][:-1]
@@ -105,37 +96,12 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
     chatbot.train()
     optimizer.zero_grad()
     for i_epoch in range(args.epoch):
-        i_batch = 0
-        for input_ids, attention_masks in tqdm(train_loader):
-            s1 = generate_response(
-                input_ids, attention_masks, tokenizer, chatbot, args_bot
-            )
+        for batch in tqdm(train_loader):
+            s1 = generate_response(batch, tokenizer, chatbot, args_bot)
             for i in range(args.batch_size):
-                print(tokenizer.decode(input_ids[i]))
+                print(tokenizer.decode(batch[0][i]))
                 print(tokenizer.decode(s1[i]))
             exit()
-            # score = get_score([h[-2:] for h in history_enc], tokenizer)
-
-            # loss = 0
-            # for sb, s in zip(score_bot, score):
-            #     loss -= s + 0.2 * sb
-            # loss.backward()
-
-            # if i_batch % 2 == 0:
-            #     torch.nn.utils.clip_grad_norm_(chatbot.parameters(), 1.0)
-            #     optimizer.step()
-            #     scheduler.step()
-            #     optimizer.zero_grad()
-            # if i_batch % args.log_step == 0:
-            #     niter = i_epoch * len(train_loader) + i_batch
-            #     writer.add_scalar("Train/Loss", loss, niter)
-            #     writer.add_scalar("Train/score_bot", score_bot, niter)
-            #     writer.add_scalar("Train/score", score, niter)
-            # if i_batch % args.save_time_step == 0:
-            #     chatbot.save_pretrained(
-            #         os.path.join(args.work_space, args.save_dir, args.model_name),
-            #     )
-
 
 class ARG:
     def __init__(self, bt=8):

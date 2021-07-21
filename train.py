@@ -229,13 +229,13 @@ def get_data_loaders_DialoGPT(args, tokenizer):
         max_l = max(len(data.split()) for data in dataset["history"])
         print(f"{dataset_name} max_length: {max_l}")
 
-        names = ["input_ids", "attention_mask", "token_type_ids"]
+        names = ["input_ids", "attention_mask"]
         for name in names:
             dataset[name] = []
 
         for data in dataset["history"]:
             data_enc = tokenizer.encode_plus(
-                data, max_length=max_l, padding="max_length", return_tensors="pt", return_token_type_ids=True
+                data, max_length=max_l, padding="max_length", return_tensors="pt"
             )
 
             # some encoding have strange length
