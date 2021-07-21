@@ -43,20 +43,26 @@ temperature = 1
 
 
 def generate_response(
-    input_ids, attention_masks, tokenizer, model, args, current_output=None
+    batch, tokenizer, model, args, current_output=None
 ):
     """
     Generate response without persona.
     """
     eos_id = tokenizer.eos_token_id
     bt = args.train_batch_size
+    input_ids, attention_masks, token_type_ids = batch
 
     if current_output is None:
         current_output = [[] for _ in range(bt)]
     _, past = model(
-        input_ids.to(args.device), attention_mask=attention_masks.to(args.device)
+        input_ids.to(args.device), attention_mask=attention_masks.to(args.device), token_type_ids=token_type_ids
     )
 
+    print(token_type_ids.shape)
+    print(token_type_ids[0])
+    token_tp = torch.LongTensor([[0] for _ in range(bt)]).to(
+        args.device
+    )
     prev = torch.LongTensor([[tokenizer.eos_token_id] for _ in range(bt)]).to(
         args.device
     )
@@ -64,11 +70,11 @@ def generate_response(
     # print("##########")
     # print(tokenizer.decode(input_ids[0]))
     for i_word in range(args.max_length):
-        logits, past = model(prev, past=past)
+        logits, past = model(prev, token_type_ids=token_tp, past=past)
         logits = logits.squeeze(0).squeeze(1)
         probs = torch.softmax(logits, dim=-1)
 
-        prev = torch.multinomial(probs, num_samples=1)
+        prev = torch.multinomial(probs,to num_samples=1)
 
         if i_word == 0:
             for j in range(bt):

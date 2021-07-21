@@ -229,13 +229,16 @@ def get_data_loaders_DialoGPT(args, tokenizer):
         max_l = max(len(data.split()) for data in dataset["history"])
         print(f"{dataset_name} max_length: {max_l}")
 
-        dataset["input_ids"] = []
-        dataset["attention_mask"] = []
-        names = ["input_ids", "attention_mask"]
+        names = ["input_ids", "attention_mask", "token_type_ids"]
+        for name in names:
+            dataset[name] = []
+
         for data in dataset["history"]:
             data_enc = tokenizer.encode_plus(
-                data, max_length=max_l, padding="max_length", return_tensors="pt"
+                data, max_length=max_l, padding="max_length", return_tensors="pt", return_token_type_ids=True
             )
+
+            # some encoding have strange length
             flag = False
             for name in names:
                 if len(data_enc[name][0]) != max_l:
@@ -243,8 +246,10 @@ def get_data_loaders_DialoGPT(args, tokenizer):
                     break
             if flag:
                 continue
+        
             for name in names:
                 dataset[name].append(data_enc[name].reshape(-1))
+
         for name in names:
             tensor = torch.stack(tuple(dataset[name]), dim=0)
             tensor_datasets[dataset_name].append(tensor)
