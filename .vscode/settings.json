@@ -1,7 +1,9 @@
 {
     "python.formatting.provider": "black",
     "cSpell.words": [
+        "dialo",
         "dtype",
+        "gpt",
         "multinomial",
         "probs",
         "topk",

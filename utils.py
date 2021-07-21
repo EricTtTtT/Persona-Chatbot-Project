@@ -33,12 +33,15 @@ def download_pretrained_model():
     return tempdir
 
 
-def get_dataset(tokenizer, dataset_path, dataset_cache):
+def get_dataset(tokenizer, dataset_path, dataset_cache, encode=True):
     """Get tokenized PERSONACHAT dataset from S3 or cache."""
     dataset_path = dataset_path or PERSONACHAT_URL
-    dataset_cache = (
-        dataset_cache + "_" + type(tokenizer).__name__
-    )  # To avoid using GPT cache for GPT-2 and vice-versa
+    if encode:
+        dataset_cache = (
+            dataset_cache + "_" + type(tokenizer).__name__
+        )  # To avoid using GPT cache for GPT-2 and vice-versa
+    else:
+        dataset_cache = dataset_cache + "_" + type(tokenizer).__name__ + "_raw"
     if dataset_cache and os.path.isfile(dataset_cache):
         logger.info("Load tokenized dataset from cache at %s", dataset_cache)
         dataset = torch.load(dataset_cache)
@@ -52,7 +55,10 @@ def get_dataset(tokenizer, dataset_path, dataset_cache):
 
         def tokenize(obj):
             if isinstance(obj, str):
-                return tokenizer.convert_tokens_to_ids(tokenizer.tokenize(obj))
+                if encode:
+                    return tokenizer.convert_tokens_to_ids(tokenizer.tokenize(obj))
+                else:
+                    return obj
             if isinstance(obj, dict):
                 return dict((n, tokenize(o)) for n, o in obj.items())
             return list(tokenize(o) for o in obj)

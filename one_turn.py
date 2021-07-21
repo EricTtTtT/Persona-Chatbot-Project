@@ -7,7 +7,7 @@ import random
 import warnings
 
 from argparse import ArgumentParser
-from itertools import chain
+from itertools import chain, permutations
 
 from tqdm.auto import tqdm
 import numpy as np
@@ -17,9 +17,17 @@ import torch.nn.functional as F
 from transformers import (
     AdamW,
     get_linear_schedule_with_warmup,
+    AutoModelForCausalLM,
+    AutoTokenizer,
 )
+
 from torch.nn.utils.rnn import pad_sequence
-from train import get_data_loaders
+from train import (
+    SPECIAL_TOKENS,
+    add_special_tokens_,
+    get_data_loaders,
+    get_data_loaders_DialoGPT,
+)
 
 from tensorboardX import SummaryWriter
 
@@ -29,106 +37,56 @@ from Chatbot import prepare_chatbot, get_score
 # device_1 = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 writer = SummaryWriter("runs")
-SPECIAL_TOKENS = ["<bos>", "<|eos|>", "<speaker1>", "<speaker2>", "<pad>"]
+# SPECIAL_TOKENS = ["<bos>", "<|eos|>", "<speaker1>", "<speaker2>", "<pad>"]
 
 temperature = 1
 
 
-def generate_response(history, tokenizer, model, args, current_output=None):
+def generate_response(
+    input_ids, attention_masks, tokenizer, model, args, current_output=None
+):
     """
     Generate response without persona.
     """
-    special_tokens_ids = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)
-    print("special_tokens_ids", special_tokens_ids)
-    bos, eos, spk1, spk2, pad = special_tokens_ids
+    eos_id = tokenizer.eos_token_id
+    bt = args.train_batch_size
+
     if current_output is None:
-        current_output = [[] for _ in range(args.train_batch_size)]
+        current_output = [[] for _ in range(bt)]
+    _, past = model(
+        input_ids.to(args.device), attention_mask=attention_masks.to(args.device)
+    )
 
-    sequence_bt = [[[bos]] + history_i for history_i in history]
-    sequence_bt = [
-        [seq[0]]
-        + [[spk2 if (len(seq) - i) % 2 else spk1] + s for i, s in enumerate(seq[1:])]
-        for seq in sequence_bt
-    ]
-    token_type_ids_bt = [
-        [spk2 if i % 2 else spk1 for i, s in enumerate(seq) for _ in s]
-        for seq in sequence_bt
-    ]
-    sequence_bt = [list(chain(*seq)) for seq in sequence_bt]
-    mask_len = [len(x) for x in sequence_bt]
-    mass = []
-    for i in range(len(sequence_bt)):
-        m = [1 for j in range(mask_len[i])]
-        mass.append(m[:])
-
-    sequence_bt = pad_sequence(
-        [torch.LongTensor(x) for x in sequence_bt],
-        batch_first=True,
-        padding_value=tokenizer.encode("<pad>")[0],
-    ).to(args.device)
-    token_type_ids_bt = pad_sequence(
-        [torch.LongTensor(x) for x in token_type_ids_bt],
-        batch_first=True,
-        padding_value=spk1,
-    ).to(args.device)
-    mask = pad_sequence(
-        [torch.LongTensor(x) for x in mass], batch_first=True, padding_value=0
-    ).to(args.device)
-
-    print("###################### sequence_bt")
-    print(sequence_bt[0])
-    _, past = model(sequence_bt, attention_mask=mask, token_type_ids=token_type_ids_bt)
-    token_tp = torch.LongTensor([[spk2] if len(x) % 2 else [spk1] for x in history]).to(
+    prev = torch.LongTensor([[tokenizer.eos_token_id] for _ in range(bt)]).to(
         args.device
     )
-    prev = torch.LongTensor([[spk2] if len(x) % 2 else [spk1] for x in history]).to(
-        args.device
-    )
-    print("###################### prev")
-    print(prev[0])
-
-    temp_sen = [[] for i in range(len(history))]
+    temp_sen = [[] for i in range(bt)]
+    # print("##########")
+    # print(tokenizer.decode(input_ids[0]))
     for i_word in range(args.max_length):
-        logits, past = model(prev, token_type_ids=token_tp, past=past)
-        print(f"logits.shape {logits.shape}")
-
+        logits, past = model(prev, past=past)
         logits = logits.squeeze(0).squeeze(1)
         probs = torch.softmax(logits, dim=-1)
 
         prev = torch.multinomial(probs, num_samples=1)
-        print("prev")
-        print(prev)
 
-        for prev_i, prob_i in zip(prev, probs):
-            if i_word < args.min_length and prev_i.item() in special_tokens_ids:
-                count = 0
-
-                while prev_i.item() in special_tokens_ids:
-                    if prob_i.max().item() == 1:
-                        warnings.warn(
-                            "Warning: model generating special token with probability 1."
-                        )
-                        break  # avoid infinitely looping over special token
-                    prev_i = torch.multinomial(prob_i, num_samples=1)
-                    count += 1
-                    print(f"{count}: {prev_i}")
         if i_word == 0:
-            for j in range(len(history)):
+            for j in range(bt):
                 temp_sen[j].append(prev[j].item())
             continue
         flag = 1
 
-        for j in range(0, len(history)):
-            if temp_sen[j][-1] not in special_tokens_ids:
+        for j in range(0, bt):
+            if temp_sen[j][-1] != eos_id:
                 flag = 0
                 temp_sen[j].append(prev[j].item())
         if flag == 1:
             break
-
-    for i in range(len(temp_sen)):
-        if temp_sen[i][-1] == eos:
+    # print("#####")
+    # print(tokenizer.decode(temp_sen[0]))
+    for i in range(bt):
+        if temp_sen[i][-1] == eos_id:
             temp_sen[i][:] = temp_sen[i][:-1]
-    print("temp_sen", temp_sen[0])
     return temp_sen
 
 
@@ -138,93 +96,60 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
         optimizer, num_warmup_steps=500, num_training_steps=8000
     )
 
-    selector_history = 5
-
     chatbot.train()
     optimizer.zero_grad()
     for i_epoch in range(args.epoch):
         i_batch = 0
-        sc = 0
-        prob_record = []
-        score_record = []
-        total_loss = 0
-        for input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids in tqdm(
-            train_loader
-        ):
-            # ===== set up history ===============
-            # interlocutor_persona_enc = []
-            history_enc = []
-            for input_i in input_ids:
-                history = []
-                sen = []
-                per = True
-                sen_spk2 = True
-                for i in range(1, len(input_i[0])):
-                    if input_i[0][i] != 50258:  # <|eos|>
-                        if per and input_i[0][i] == 50261:  # <speaker2>
-                            per = False
-                        else:
-                            if sen_spk2:
-                                if input_i[0][i] == 50260:
-                                    sen_spk2 = False
-                                    history.append(sen)
-                                    sen = []
-                                else:
-                                    sen.append(int(input_i[0][i]))
-                            else:
-                                if input_i[0][i] == 50261:
-                                    sen_spk2 = True
-                                    history.append(sen)
-                                    sen = []
-                                else:
-                                    sen.append(int(input_i[0][i]))
-                    else:
-                        history.append(sen)
-                        break
-                history_enc.append(history)
-            print("######################  history init")
-            history_enc = [h[:-1] for h in history_enc]
-            for sen_enc in history_enc[0]:
-                print(tokenizer.decode(sen_enc))
-
-            # ===== generate s1 from chatbot ==========
-            response_enc = generate_response(history_enc, tokenizer, chatbot, args_bot)
-            print("###################### s1")
-            print(tokenizer.decode(response_enc[0]))
+        for input_ids, attention_masks in tqdm(train_loader):
+            s1 = generate_response(
+                input_ids, attention_masks, tokenizer, chatbot, args_bot
+            )
             for i in range(args.batch_size):
-                history_enc[i].append(response_enc[i])
+                print(tokenizer.decode(input_ids[i]))
+                print(tokenizer.decode(s1[i]))
+            exit()
+            # score = get_score([h[-2:] for h in history_enc], tokenizer)
 
-            score_bot = get_score([h[-2:] for h in history_enc], tokenizer)
+            # loss = 0
+            # for sb, s in zip(score_bot, score):
+            #     loss -= s + 0.2 * sb
+            # loss.backward()
 
-            # ===== generate s2 from interlocutor ==========
-            with torch.no_grad():
-                response_enc = generate_response(
-                    history_enc, tokenizer, interlocutor, args_bot
-                )
-                for i in range(args.batch_size):
-                    history_enc[i].append(response_enc[i])
+            # if i_batch % 2 == 0:
+            #     torch.nn.utils.clip_grad_norm_(chatbot.parameters(), 1.0)
+            #     optimizer.step()
+            #     scheduler.step()
+            #     optimizer.zero_grad()
+            # if i_batch % args.log_step == 0:
+            #     niter = i_epoch * len(train_loader) + i_batch
+            #     writer.add_scalar("Train/Loss", loss, niter)
+            #     writer.add_scalar("Train/score_bot", score_bot, niter)
+            #     writer.add_scalar("Train/score", score, niter)
+            # if i_batch % args.save_time_step == 0:
+            #     chatbot.save_pretrained(
+            #         os.path.join(args.work_space, args.save_dir, args.model_name),
+            #     )
 
-            score = get_score([h[-2:] for h in history_enc], tokenizer)
 
-            loss = 0
-            for sb, s in zip(score_bot, score):
-                loss -= s + 0.2 * sb
-            loss.backward()
-
-            if i_batch % 2 == 0:
-                torch.nn.utils.clip_grad_norm_(chatbot.parameters(), 1.0)
-                optimizer.step()
-                scheduler.step()
-                optimizer.zero_grad()
-            if i_batch % args.log_step == 0:
-                niter = i_epoch * len(train_loader) + i_batch
-                writer.add_scalar("Train/Loss", loss, niter)
-                writer.add_scalar("Train/score_bot", score_bot, niter)
-                writer.add_scalar("Train/score", score, niter)
-            if i_batch % args.save_time_step == 0:
-                chatbot.save_pretrained(
-                    os.path.join(args.work_space, args.save_dir, args.model_name),
-                )
+class ARG:
+    def __init__(self, bt=8):
+        self.dataset_path = "data/personachat_self_original.json"
+        self.dataset_cache = "data/dataset_cache"
+        self.max_history = 2
+        self.num_candidates = 1
+        self.device = "cuda"
+        self.no_sample = False
+        self.max_length = 40
+        self.min_length = 1
+        self.seed = 2
+        self.temperature = 1
+        self.top_k = 0
+        self.top_p = 0
+        self.distributed = False
+        self.personality_permutations = 1
+        self.local_rank = -1
+        self.train_batch_size = bt
+        self.valid_batch_size = bt
 
 
 def main():
@@ -236,9 +161,7 @@ def main():
     parser.add_argument("--epoch", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--save_dir", type=str, default="model/")
-    parser.add_argument(
-        "--model_name", type=str, default="one"
-    )  # persona selector model folder
+    parser.add_argument("--model_name", type=str, default="dialo_one")
 
     # steps
     parser.add_argument("--log_step", type=int, default=2)
@@ -246,19 +169,24 @@ def main():
     parser.add_argument("--save_time_step", type=int, default=100)
 
     args = parser.parse_args()
+    args_bot = ARG(args.batch_size)
+
     os.makedirs(
         os.path.join(args.work_space, args.save_dir, args.model_name), exist_ok=True
     )
 
     # ===== prepare dataset, models and optimizer ==========
-    chatbot, interlocutor, tokenizer, args_bot = prepare_chatbot(
-        "gpt2", bt=args.batch_size
-    )
-    train_loader, val_loader, train_sampler, valid_sampler = get_data_loaders(
+    tokenizer = AutoTokenizer.from_pretrained("microsoft/DialoGPT-medium")
+    chatbot = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-medium")
+    interlocutor = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-medium")
+
+    chatbot.to(args_bot.device).train()
+    interlocutor.to(args_bot.device).eval()
+
+    tokenizer.pad_token = tokenizer.decode([0])
+    train_loader, val_loader, train_sampler, valid_sampler = get_data_loaders_DialoGPT(
         args_bot, tokenizer
     )
-    del val_loader, train_sampler, valid_sampler
-    print("\n\nlen(train_loader): ", len(train_loader), "\n\n")
 
     train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot)
 

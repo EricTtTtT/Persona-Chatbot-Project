@@ -94,6 +94,7 @@ def generate_response(personality, history, tokenizer, model, arg, current_outpu
     ).to(arg.device)
 
     _, past = model(sequence_bt, attention_mask=mask, token_type_ids=token_type_ids_bt)
+
     token_tp = torch.LongTensor(
         [[speaker2] if len(x) % 2 else [speaker1] for x in history]
     ).to(arg.device)
@@ -103,7 +104,6 @@ def generate_response(personality, history, tokenizer, model, arg, current_outpu
 
     temp_sen = [[] for i in range(len(history))]
     for i_word in range(arg.max_length):
-
         logits, past = model(prev, token_type_ids=token_tp, past=past)
         logits = logits.squeeze(0).squeeze(1)
         # logits = top_filtering(logits, top_k=arg.top_k, top_p=arg.top_p)

@@ -57,14 +57,20 @@ def average_distributed_scalar(scalar, args):
     return scalar_t.item()
 
 
-def pad_dataset(dataset, padding=0):
+def pad_dataset(dataset, padding=0, pad_left=False):
     """Pad the dataset. This could be optimized by defining a Dataset class and padding at the batch level, but this is simpler."""
     max_l = max(len(x) for x in dataset["input_ids"])
     for name in PADDED_INPUTS:
-        dataset[name] = [
-            x + [padding if name != "lm_labels" else -100] * (max_l - len(x))
-            for x in dataset[name]
-        ]
+        if pad_left:
+            dataset[name] = [
+                [padding if name != "lm_labels" else -100] * (max_l - len(x)) + x
+                for x in dataset[name]
+            ]
+        else:
+            dataset[name] = [
+                x + [padding if name != "lm_labels" else -100] * (max_l - len(x))
+                for x in dataset[name]
+            ]
     return dataset
 
 
@@ -130,6 +136,7 @@ def get_data_loaders(args, tokenizer):
                         instance = build_input_from_segments(
                             persona, history, candidate, tokenizer, lm_labels
                         )
+
                         for input_name, input_array in instance.items():
                             datasets[dataset_name][input_name].append(input_array)
                     datasets[dataset_name]["mc_labels"].append(num_candidates - 1)
@@ -149,6 +156,97 @@ def get_data_loaders(args, tokenizer):
                 tensor = tensor.view(
                     (-1, datasets[dataset_name]["n_candidates"]) + tensor.shape[1:]
                 )
+            tensor_datasets[dataset_name].append(tensor)
+
+    logger.info("Build train and validation dataloaders")
+    train_dataset, valid_dataset = TensorDataset(
+        *tensor_datasets["train"]
+    ), TensorDataset(*tensor_datasets["valid"])
+    train_sampler = (
+        torch.utils.data.distributed.DistributedSampler(train_dataset)
+        if args.distributed
+        else None
+    )
+    valid_sampler = (
+        torch.utils.data.distributed.DistributedSampler(valid_dataset)
+        if args.distributed
+        else None
+    )
+    train_loader = DataLoader(
+        train_dataset,
+        sampler=train_sampler,
+        batch_size=args.train_batch_size,
+        shuffle=(not args.distributed),
+    )
+    valid_loader = DataLoader(
+        valid_dataset,
+        sampler=valid_sampler,
+        batch_size=args.valid_batch_size,
+        shuffle=False,
+    )
+
+    logger.info(
+        "Train dataset (Batch, Candidates, Seq length): {}".format(
+            train_dataset.tensors[0].shape
+        )
+    )
+    logger.info(
+        "Valid dataset (Batch, Candidates, Seq length): {}".format(
+            valid_dataset.tensors[0].shape
+        )
+    )
+    return train_loader, valid_loader, train_sampler, valid_sampler
+
+
+def get_data_loaders_DialoGPT(args, tokenizer):
+    """Prepare the dataset for training and evaluation"""
+    dataset_chat = get_dataset(
+        tokenizer, args.dataset_path, args.dataset_cache, encode=False
+    )
+    logger.info("Build inputs and labels")
+    datasets = {"train": defaultdict(list), "valid": defaultdict(list)}
+    for dataset_name, dataset in dataset_chat.items():
+        for dialog in dataset:
+            for utterance in dialog["utterances"]:
+                if len(utterance["history"]) < 2 * args.max_history:
+                    continue
+                history = utterance["history"][-(2 * args.max_history) :]
+                # print("######################")
+                # for h in history:
+                #     print(h)
+                # exit()
+                instance = ""
+                for h in history[:-1]:
+                    instance += h + f" {tokenizer.eos_token} "
+                instance += history[-1]
+                # print(instance)
+                # exit()
+                datasets[dataset_name]["history"].append(instance)
+    logger.info("Pad inputs and convert to Tensor")
+    tensor_datasets = {"train": [], "valid": []}
+
+    for dataset_name, dataset in datasets.items():
+        max_l = max(len(data.split()) for data in dataset["history"])
+        print(f"{dataset_name} max_length: {max_l}")
+
+        dataset["input_ids"] = []
+        dataset["attention_mask"] = []
+        names = ["input_ids", "attention_mask"]
+        for data in dataset["history"]:
+            data_enc = tokenizer.encode_plus(
+                data, max_length=max_l, padding="max_length", return_tensors="pt"
+            )
+            flag = False
+            for name in names:
+                if len(data_enc[name][0]) != max_l:
+                    flag = True
+                    break
+            if flag:
+                continue
+            for name in names:
+                dataset[name].append(data_enc[name].reshape(-1))
+        for name in names:
+            tensor = torch.stack(tuple(dataset[name]), dim=0)
             tensor_datasets[dataset_name].append(tensor)
 
     logger.info("Build train and validation dataloaders")
