@@ -93,14 +93,19 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
         optimizer, num_warmup_steps=500, num_training_steps=8000
     )
 
-    chatbot.train()
     optimizer.zero_grad()
     for i_epoch in range(args.epoch):
         for batch in tqdm(train_loader):
-            s1 = generate_response(batch, tokenizer, chatbot, args_bot)
-            for i in range(args.batch_size):
-                print(tokenizer.decode(batch[0][i]))
-                print(tokenizer.decode(s1[i]))
+            input_ids, attention_mask = batch
+            input_ids = input_ids.to(args_bot.device)
+            attention_mask = attention_mask.to(args_bot.device)
+            outputs = chatbot.generate(
+                input_ids=input_ids, attention_mask=attention_mask,
+                pad_token_id = 0,
+                max_length=200, do_sample=True
+            )
+            print(outputs.shape)
+            print(tokenizer.batch_decode([outputs[0]]))
             exit()
 
 class ARG:
@@ -118,7 +123,6 @@ class ARG:
         self.top_k = 0
         self.top_p = 0
         self.distributed = False
-        self.personality_permutations = 1
         self.local_rank = -1
         self.train_batch_size = bt
         self.valid_batch_size = bt
@@ -128,7 +132,7 @@ def main():
     parser = ArgumentParser()
     # path
     parser.add_argument("--work_space", type=str, default=".")
-    parser.add_argument("--model_checkpoint", type=str, default="model/gpt2/")
+    parser.add_argument("--model_checkpoint", type=str, default="model/dialogpt-medium/")
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--epoch", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1e-5)
@@ -148,14 +152,33 @@ def main():
     )
 
     # ===== prepare dataset, models and optimizer ==========
-    tokenizer = AutoTokenizer.from_pretrained("microsoft/DialoGPT-medium")
-    chatbot = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-medium")
-    interlocutor = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-medium")
+    # "microsoft/DialoGPT-medium"
+    tokenizer = AutoTokenizer.from_pretrained(args.model_checkpoint)
+    chatbot = AutoModelForCausalLM.from_pretrained(args.model_checkpoint)
+    interlocutor = AutoModelForCausalLM.from_pretrained(args.model_checkpoint)
 
     chatbot.to(args_bot.device).train()
     interlocutor.to(args_bot.device).eval()
-
+    # tokenizer.pad_token = tokenizer.eos_token
     tokenizer.pad_token = tokenizer.decode([0])
+
+    history = [
+        # "just the bible and some <|endoftext|> good! i want to travel more, money issues though! <|endoftext|> ukr. travel is lit. its hard to get money <|endoftext|> it truly is! i'm going to get there though! goals lol <|endoftext|>"
+        "good evening, how are you? <|endoftext|> coupons are awesome. how are you? <|endoftext|> i love coupon cutting. i detest school. <|endoftext|> you should coupon with me. saves a ton of money! <|endoftext|>"
+    ]
+    h_enc = tokenizer(history, max_length=45, padding='max_length', return_tensors='pt')
+    h_enc = tokenizer(history, max_length=50, padding='max_length', return_tensors='pt')
+    print(h_enc)
+    input_ids = h_enc['input_ids'].to(args_bot.device)
+    attention_mask = h_enc['attention_mask'].to(args_bot.device)
+    outputs = chatbot.generate(
+        input_ids=input_ids, attention_mask=attention_mask,
+        pad_token_id=0,
+        max_length=100, do_sample=True
+    )
+    print(tokenizer.batch_decode(outputs))
+    exit()
+
     train_loader, val_loader, train_sampler, valid_sampler = get_data_loaders_DialoGPT(
         args_bot, tokenizer
     )

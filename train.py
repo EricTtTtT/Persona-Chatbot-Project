@@ -214,11 +214,9 @@ def get_data_loaders_DialoGPT(args, tokenizer):
                 # print("######################")
                 # for h in history:
                 #     print(h)
-                # exit()
                 instance = ""
-                for h in history[:-1]:
+                for h in history:
                     instance += h + f" {tokenizer.eos_token} "
-                instance += history[-1]
                 # print(instance)
                 # exit()
                 datasets[dataset_name]["history"].append(instance)
