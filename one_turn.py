@@ -42,9 +42,7 @@ writer = SummaryWriter("runs")
 temperature = 1
 
 
-def generate_response(
-    batch, tokenizer, model, args, current_output=None
-):
+def generate_response(batch, tokenizer, model, args, current_output=None):
     """
     Generate response without persona.
     """
@@ -54,7 +52,9 @@ def generate_response(
 
     if current_output is None:
         current_output = [[] for _ in range(bt)]
-    _, past = model(input_ids.to(args.device), attention_mask=attention_masks.to(args.device))
+    _, past = model(
+        input_ids.to(args.device), attention_mask=attention_masks.to(args.device)
+    )
 
     prev = torch.LongTensor([[tokenizer.eos_token_id] for _ in range(bt)]).to(
         args.device
@@ -100,13 +100,16 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
             input_ids = input_ids.to(args_bot.device)
             attention_mask = attention_mask.to(args_bot.device)
             outputs = chatbot.generate(
-                input_ids=input_ids, attention_mask=attention_mask,
-                pad_token_id = 0,
-                max_length=200, do_sample=True
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                pad_token_id=0,
+                max_length=200,
+                do_sample=True,
             )
             print(outputs.shape)
             print(tokenizer.batch_decode([outputs[0]]))
             exit()
+
 
 class ARG:
     def __init__(self, bt=8):
@@ -132,7 +135,9 @@ def main():
     parser = ArgumentParser()
     # path
     parser.add_argument("--work_space", type=str, default=".")
-    parser.add_argument("--model_checkpoint", type=str, default="model/dialogpt-medium/")
+    parser.add_argument(
+        "--model_checkpoint", type=str, default="model/dialogpt-medium/"
+    )
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--epoch", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1e-5)
@@ -153,28 +158,32 @@ def main():
 
     # ===== prepare dataset, models and optimizer ==========
     # "microsoft/DialoGPT-medium"
-    tokenizer = AutoTokenizer.from_pretrained(args.model_checkpoint)
-    chatbot = AutoModelForCausalLM.from_pretrained(args.model_checkpoint)
-    interlocutor = AutoModelForCausalLM.from_pretrained(args.model_checkpoint)
+    tokenizer = AutoTokenizer.from_pretrained("microsoft/DialoGPT-medium")
+    chatbot = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-medium")
+    # tokenizer = AutoTokenizer.from_pretrained(args.model_checkpoint)
+    # chatbot = AutoModelForCausalLM.from_pretrained(args.model_checkpoint)
+    # interlocutor = AutoModelForCausalLM.from_pretrained(args.model_checkpoint)
 
     chatbot.to(args_bot.device).train()
-    interlocutor.to(args_bot.device).eval()
+    # interlocutor.to(args_bot.device).eval()
     # tokenizer.pad_token = tokenizer.eos_token
     tokenizer.pad_token = tokenizer.decode([0])
 
     history = [
-        # "just the bible and some <|endoftext|> good! i want to travel more, money issues though! <|endoftext|> ukr. travel is lit. its hard to get money <|endoftext|> it truly is! i'm going to get there though! goals lol <|endoftext|>"
         "good evening, how are you? <|endoftext|> coupons are awesome. how are you? <|endoftext|> i love coupon cutting. i detest school. <|endoftext|> you should coupon with me. saves a ton of money! <|endoftext|>"
     ]
-    h_enc = tokenizer(history, max_length=45, padding='max_length', return_tensors='pt')
-    h_enc = tokenizer(history, max_length=50, padding='max_length', return_tensors='pt')
+    # length of history is 45
+    h_enc = tokenizer(history, max_length=45, padding="max_length", return_tensors="pt")
+    # h_enc = tokenizer(history, max_length=50, padding='max_length', return_tensors='pt')
     print(h_enc)
-    input_ids = h_enc['input_ids'].to(args_bot.device)
-    attention_mask = h_enc['attention_mask'].to(args_bot.device)
+    input_ids = h_enc["input_ids"].to(args_bot.device)
+    attention_mask = h_enc["attention_mask"].to(args_bot.device)
     outputs = chatbot.generate(
-        input_ids=input_ids, attention_mask=attention_mask,
+        input_ids=input_ids,
+        attention_mask=attention_mask,
         pad_token_id=0,
-        max_length=100, do_sample=True
+        max_length=100,
+        do_sample=True,
     )
     print(tokenizer.batch_decode(outputs))
     exit()

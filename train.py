@@ -244,7 +244,7 @@ def get_data_loaders_DialoGPT(args, tokenizer):
                     break
             if flag:
                 continue
-        
+
             for name in names:
                 dataset[name].append(data_enc[name].reshape(-1))
 
