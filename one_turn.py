@@ -12,7 +12,6 @@ from itertools import chain, permutations
 from tqdm.auto import tqdm
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 from transformers import (
     AdamW,
@@ -21,17 +20,11 @@ from transformers import (
     AutoTokenizer,
 )
 
-from torch.nn.utils.rnn import pad_sequence
-from train import (
-    SPECIAL_TOKENS,
-    add_special_tokens_,
-    get_data_loaders,
-    get_data_loaders_DialoGPT,
-)
+from train import get_data_loaders_DialoGPT
 
 from tensorboardX import SummaryWriter
 
-from Chatbot import prepare_chatbot, get_score
+from Chatbot import get_score
 
 # device_0 = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 # device_1 = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -42,27 +35,27 @@ writer = SummaryWriter("runs")
 temperature = 1
 
 
-def generate_response(batch, tokenizer, model, args, current_output=None):
+def generate_response(input_ids, mask, tokenizer, model, args):
     """
     Generate response without persona.
     """
     eos_id = tokenizer.eos_token_id
     bt = args.train_batch_size
-    input_ids, attention_masks = batch
 
-    if current_output is None:
-        current_output = [[] for _ in range(bt)]
-    _, past = model(
-        input_ids.to(args.device), attention_mask=attention_masks.to(args.device)
-    )
-
+    input_ids = input_ids.to(args.device)
+    mask = mask.to(args.device)
+    _, past = model(input_ids, attention_mask=mask)
     prev = torch.LongTensor([[tokenizer.eos_token_id] for _ in range(bt)]).to(
         args.device
     )
+    mask_append = torch.tensor([[1] for i in range(bt)]).to(args.device)
+    mask = torch.cat((mask, mask_append), 1)
     temp_sen = [[] for i in range(bt)]
 
+    os.system("nvidia-smi")
     for i_word in range(args.max_length):
-        logits, past = model(prev, past=past)
+        logits, past = model(prev, past=past, attention_mask=mask)
+        mask = torch.cat((mask, mask_append), 1)
         logits = logits.squeeze(0).squeeze(1)
         probs = torch.softmax(logits, dim=-1)
 
@@ -80,6 +73,7 @@ def generate_response(batch, tokenizer, model, args, current_output=None):
                 temp_sen[j].append(prev[j].item())
         if flag == 1:
             break
+    os.system("nvidia-smi")
 
     for i in range(bt):
         if temp_sen[i][-1] == eos_id:
@@ -97,18 +91,22 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
     for i_epoch in range(args.epoch):
         for batch in tqdm(train_loader):
             input_ids, attention_mask = batch
-            input_ids = input_ids.to(args_bot.device)
-            attention_mask = attention_mask.to(args_bot.device)
-            outputs = chatbot.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                pad_token_id=0,
-                max_length=200,
-                do_sample=True,
+            chatbot_ret = generate_response(
+                input_ids, attention_mask, tokenizer, chatbot, args_bot
             )
-            print(outputs.shape)
-            print(tokenizer.batch_decode([outputs[0]]))
+            for input, reply in zip(input_ids, chatbot_ret):
+                print("\n#################")
+                print(tokenizer.decode(input))
+                print(tokenizer.decode(reply))
             exit()
+
+            # outputs = chatbot.generate(
+            #     input_ids=input_ids,
+            #     attention_mask=attention_mask,
+            #     pad_token_id=0,
+            #     max_length=200,
+            #     do_sample=True,
+            # )
 
 
 class ARG:
@@ -119,7 +117,7 @@ class ARG:
         self.num_candidates = 1
         self.device = "cuda"
         self.no_sample = False
-        self.max_length = 40
+        self.max_length = 20
         self.min_length = 1
         self.seed = 2
         self.temperature = 1
@@ -158,39 +156,41 @@ def main():
 
     # ===== prepare dataset, models and optimizer ==========
     # "microsoft/DialoGPT-medium"
-    tokenizer = AutoTokenizer.from_pretrained("microsoft/DialoGPT-medium")
-    chatbot = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-medium")
-    # tokenizer = AutoTokenizer.from_pretrained(args.model_checkpoint)
-    # chatbot = AutoModelForCausalLM.from_pretrained(args.model_checkpoint)
-    # interlocutor = AutoModelForCausalLM.from_pretrained(args.model_checkpoint)
+    # tokenizer = AutoTokenizer.from_pretrained("microsoft/DialoGPT-medium")
+    # chatbot = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-medium")
+    tokenizer = AutoTokenizer.from_pretrained(args.model_checkpoint)
+    chatbot = AutoModelForCausalLM.from_pretrained(args.model_checkpoint)
+    interlocutor = AutoModelForCausalLM.from_pretrained(args.model_checkpoint)
 
     chatbot.to(args_bot.device).train()
     # interlocutor.to(args_bot.device).eval()
     # tokenizer.pad_token = tokenizer.eos_token
     tokenizer.pad_token = tokenizer.decode([0])
 
-    history = [
-        "good evening, how are you? <|endoftext|> coupons are awesome. how are you? <|endoftext|> i love coupon cutting. i detest school. <|endoftext|> you should coupon with me. saves a ton of money! <|endoftext|>"
-    ]
-    # length of history is 45
-    h_enc = tokenizer(history, max_length=45, padding="max_length", return_tensors="pt")
-    # h_enc = tokenizer(history, max_length=50, padding='max_length', return_tensors='pt')
-    print(h_enc)
-    input_ids = h_enc["input_ids"].to(args_bot.device)
-    attention_mask = h_enc["attention_mask"].to(args_bot.device)
-    outputs = chatbot.generate(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        pad_token_id=0,
-        max_length=100,
-        do_sample=True,
-    )
-    print(tokenizer.batch_decode(outputs))
-    exit()
+    # history = [
+    #     "good evening, how are you? <|endoftext|> coupons are awesome. how are you? <|endoftext|> i love coupon cutting. i detest school. <|endoftext|> you should coupon with me. saves a ton of money! <|endoftext|>"
+    # ]
+    # # length of history is 45
+    # h_enc = tokenizer(history, max_length=45, padding="max_length", return_tensors="pt")
+    # # h_enc = tokenizer(history, max_length=50, padding='max_length', return_tensors='pt')
+    # print(h_enc)
+    # input_ids = h_enc["input_ids"].to(args_bot.device)
+    # attention_mask = h_enc["attention_mask"].to(args_bot.device)
+    # outputs = chatbot.generate(
+    #     input_ids=input_ids,
+    #     attention_mask=attention_mask,
+    #     pad_token_id=0,
+    #     max_length=100,
+    #     do_sample=True,
+    # )
+    # print(tokenizer.batch_decode(outputs))
+    # exit()
 
     train_loader, val_loader, train_sampler, valid_sampler = get_data_loaders_DialoGPT(
         args_bot, tokenizer
     )
+
+    del val_loader, train_sampler, valid_sampler
 
     train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot)
 
