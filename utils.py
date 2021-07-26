@@ -41,7 +41,7 @@ def get_dataset(tokenizer, dataset_path, dataset_cache, encode=True):
             dataset_cache + "_" + type(tokenizer).__name__
         )  # To avoid using GPT cache for GPT-2 and vice-versa
     else:
-        dataset_cache = dataset_cache + "_" + type(tokenizer).__name__ + "_raw"
+        dataset_cache = dataset_cache + "_raw"
     if dataset_cache and os.path.isfile(dataset_cache):
         logger.info("Load tokenized dataset from cache at %s", dataset_cache)
         dataset = torch.load(dataset_cache)

@@ -52,7 +52,6 @@ def generate_response(input_ids, mask, tokenizer, model, args):
     mask = torch.cat((mask, mask_append), 1)
     temp_sen = [[] for i in range(bt)]
 
-    os.system("nvidia-smi")
     for i_word in range(args.max_length):
         logits, past = model(prev, past=past, attention_mask=mask)
         mask = torch.cat((mask, mask_append), 1)
@@ -73,7 +72,6 @@ def generate_response(input_ids, mask, tokenizer, model, args):
                 temp_sen[j].append(prev[j].item())
         if flag == 1:
             break
-    os.system("nvidia-smi")
 
     for i in range(bt):
         if temp_sen[i][-1] == eos_id:
@@ -82,42 +80,90 @@ def generate_response(input_ids, mask, tokenizer, model, args):
 
 
 def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
+    chatbot.train()
+    interlocutor.eval()
+
     optimizer = AdamW(chatbot.parameters(), lr=1e-5, eps=1e-5)
     scheduler = get_linear_schedule_with_warmup(
         optimizer, num_warmup_steps=500, num_training_steps=8000
     )
 
     optimizer.zero_grad()
+    i_iter = 0
     for i_epoch in range(args.epoch):
+        i_batch = 0
         for batch in tqdm(train_loader):
-            input_ids, attention_mask = batch
-            chatbot_ret = generate_response(
-                input_ids, attention_mask, tokenizer, chatbot, args_bot
+            input_ids, mask = batch
+            chatbot_reply = generate_response(
+                input_ids, mask, tokenizer, chatbot, args_bot
             )
-            for input, reply in zip(input_ids, chatbot_ret):
-                print("\n#################")
-                print(tokenizer.decode(input))
-                print(tokenizer.decode(reply))
-            exit()
+            # for input, reply in zip(input_ids, chatbot_reply):
+            #     print("\n#################")
+            #     print(tokenizer.decode(input))
+            #     print(tokenizer.decode(reply))
+            # exit()
 
-            # outputs = chatbot.generate(
-            #     input_ids=input_ids,
-            #     attention_mask=attention_mask,
-            #     pad_token_id=0,
-            #     max_length=200,
-            #     do_sample=True,
-            # )
+            # padding reply
+            max_l = max((len(reply) for reply in chatbot_reply))
+            reply_tensor = []
+            for reply in chatbot_reply:
+                reply_tensor.append(
+                    [tokenizer.eos_token_id]
+                    + reply
+                    + [tokenizer.pad_token_id for _ in range(max_l - len(reply))]
+                )
+            reply_tensor = torch.tensor(reply_tensor)
+            input_ids = torch.cat((input_ids, reply_tensor), 1)
+            mask_append = torch.ones((args.batch_size, max_l + 1))  # +1 for eos_token
+            mask = torch.cat((mask, mask_append), 1)
+
+            spk2_reply = generate_response(
+                input_ids, mask, tokenizer, interlocutor, args_bot
+            )
+
+            # chatbot_reply = tokenizer.batch_decode(chatbot_reply)
+            # spk2_reply = tokenizer.batch_decode(spk2_reply)
+
+            q_r = [[q, r] for q, r in zip(chatbot_reply, spk2_reply)]
+            score = get_score(q_r, tokenizer)
+            loss = torch.tensor(-sum(score), requires_grad=True)
+            loss.backward()
+
+            i_batch += 1
+            if i_batch % args.step_optimize == 0:
+                writer.add_scalar("Train/Loss", loss, i_iter)
+                i_iter += 1
+                torch.nn.utils.clip_grad_norm_(chatbot.parameters(), 1.0)
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad()
+
+            if i_batch % args.step_sample == 0:
+                print(f"loss {loss:.2f}")
+                chatbot_reply_decoded = tokenizer.batch_decode(chatbot_reply)
+                spk2_reply_decoded = tokenizer.batch_decode(spk2_reply)
+                for bot, spk2 in zip(chatbot_reply_decoded, spk2_reply_decoded):
+                    print(bot, spk2)
+
+            if i_batch % args.step_save == 0:
+                torch.save(
+                    chatbot, os.path.join(args.model_folder, f"{i_epoch}epoch.bin")
+                )
 
 
-class ARG:
+class ARG_BOT:
     def __init__(self, bt=8):
         self.dataset_path = "data/personachat_self_original.json"
         self.dataset_cache = "data/dataset_cache"
-        self.max_history = 2
-        self.num_candidates = 1
+
+        # how many sentences in history, start from interlocutor
+        # ..., interlocutor, chatbot
+        self.history_turn = 1
+
+        self.history_max_length = 30
         self.device = "cuda"
         self.no_sample = False
-        self.max_length = 20
+        self.max_length = 30
         self.min_length = 1
         self.seed = 2
         self.temperature = 1
@@ -143,16 +189,15 @@ def main():
     parser.add_argument("--model_name", type=str, default="dialo_one")
 
     # steps
-    parser.add_argument("--log_step", type=int, default=2)
-    parser.add_argument("--print_sample_step", type=int, default=20)
-    parser.add_argument("--save_time_step", type=int, default=100)
+    parser.add_argument("--step_optimize", type=int, default=2)
+    parser.add_argument("--step_sample", type=int, default=100)
+    parser.add_argument("--step_save", type=int, default=500)
 
     args = parser.parse_args()
-    args_bot = ARG(args.batch_size)
+    args_bot = ARG_BOT(args.batch_size)
 
-    os.makedirs(
-        os.path.join(args.work_space, args.save_dir, args.model_name), exist_ok=True
-    )
+    args.model_folder = os.path.join(args.work_space, args.save_dir, args.model_name)
+    os.makedirs(args.model_folder, exist_ok=True)
 
     # ===== prepare dataset, models and optimizer ==========
     # "microsoft/DialoGPT-medium"
@@ -162,8 +207,8 @@ def main():
     chatbot = AutoModelForCausalLM.from_pretrained(args.model_checkpoint)
     interlocutor = AutoModelForCausalLM.from_pretrained(args.model_checkpoint)
 
-    chatbot.to(args_bot.device).train()
-    # interlocutor.to(args_bot.device).eval()
+    chatbot.to(args_bot.device)
+    interlocutor.to(args_bot.device)
     # tokenizer.pad_token = tokenizer.eos_token
     tokenizer.pad_token = tokenizer.decode([0])
 

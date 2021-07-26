@@ -6,7 +6,7 @@ import logging
 from pprint import pformat
 from argparse import ArgumentParser
 from collections import defaultdict
-from itertools import chain
+from itertools import chain, count
 
 import torch
 from torch.nn.parallel import DistributedDataParallel
@@ -208,9 +208,9 @@ def get_data_loaders_DialoGPT(args, tokenizer):
     for dataset_name, dataset in dataset_chat.items():
         for dialog in dataset:
             for utterance in dialog["utterances"]:
-                if len(utterance["history"]) < 2 * args.max_history:
+                if len(utterance["history"]) < args.history_turn + 1:
                     continue
-                history = utterance["history"][-(2 * args.max_history) :]
+                history = utterance["history"][-(args.history_turn + 1) : -1]
                 # print("######################")
                 # for h in history:
                 #     print(h)
@@ -225,22 +225,27 @@ def get_data_loaders_DialoGPT(args, tokenizer):
     tensor_datasets = {"train": [], "valid": []}
 
     for dataset_name, dataset in datasets.items():
-        max_l = max(len(data.split()) for data in dataset["history"])
-        print(f"{dataset_name} max_length: {max_l}")
-
         names = ["input_ids", "attention_mask"]
         for name in names:
             dataset[name] = []
-
+        count = 0
         for data in dataset["history"]:
+            # ignore too long sentences
+            if len(data.split()) > args.history_max_length:
+                count += 1
+                continue
+
             data_enc = tokenizer.encode_plus(
-                data, max_length=max_l, padding="max_length", return_tensors="pt"
+                data,
+                max_length=args.history_max_length,
+                padding="max_length",
+                return_tensors="pt",
             )
 
             # some encoding have strange length
             flag = False
             for name in names:
-                if len(data_enc[name][0]) != max_l:
+                if len(data_enc[name][0]) != args.history_max_length:
                     flag = True
                     break
             if flag:
@@ -248,6 +253,7 @@ def get_data_loaders_DialoGPT(args, tokenizer):
 
             for name in names:
                 dataset[name].append(data_enc[name].reshape(-1))
+        logging.info(f"remove {count} too long data in {dataset_name}")
 
         for name in names:
             tensor = torch.stack(tuple(dataset[name]), dim=0)
