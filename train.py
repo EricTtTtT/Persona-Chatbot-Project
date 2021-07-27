@@ -242,7 +242,7 @@ def get_data_loaders_DialoGPT(args, tokenizer):
                 return_tensors="pt",
             )
 
-            # some encoding have strange length
+            # skip some encoding that has strange length
             flag = False
             for name in names:
                 if len(data_enc[name][0]) != args.history_max_length:

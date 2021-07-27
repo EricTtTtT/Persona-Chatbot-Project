@@ -92,16 +92,12 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
     i_iter = 0
     for i_epoch in range(args.epoch):
         i_batch = 0
+        loss_sum = 0
         for batch in tqdm(train_loader):
             input_ids, mask = batch
             chatbot_reply = generate_response(
                 input_ids, mask, tokenizer, chatbot, args_bot
             )
-            # for input, reply in zip(input_ids, chatbot_reply):
-            #     print("\n#################")
-            #     print(tokenizer.decode(input))
-            #     print(tokenizer.decode(reply))
-            # exit()
 
             # padding reply
             max_l = max((len(reply) for reply in chatbot_reply))
@@ -121,29 +117,36 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
                 input_ids, mask, tokenizer, interlocutor, args_bot
             )
 
-            # chatbot_reply = tokenizer.batch_decode(chatbot_reply)
-            # spk2_reply = tokenizer.batch_decode(spk2_reply)
-
+            # get engagin score
             q_r = [[q, r] for q, r in zip(chatbot_reply, spk2_reply)]
             score = get_score(q_r, tokenizer)
-            loss = torch.tensor(-sum(score), requires_grad=True)
-            loss.backward()
+            loss_sum -= sum(score) / len(score)
 
             i_batch += 1
             if i_batch % args.step_optimize == 0:
-                writer.add_scalar("Train/Loss", loss, i_iter)
-                i_iter += 1
-                torch.nn.utils.clip_grad_norm_(chatbot.parameters(), 1.0)
+                loss = torch.tensor(loss_sum / args.step_optimize, requires_grad=True)
+                loss.backward()
+                loss_sum = 0
+
+                torch.nn.utils.clip_grad_norm_(chatbot.parameters(), 5.0)
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
 
+                writer.add_scalar("Train/Loss", loss, i_iter)
+                i_iter += 1
+
             if i_batch % args.step_sample == 0:
-                print(f"loss {loss:.2f}")
-                chatbot_reply_decoded = tokenizer.batch_decode(chatbot_reply)
+                input_ids_decoded = tokenizer.batch_decode(input_ids)
                 spk2_reply_decoded = tokenizer.batch_decode(spk2_reply)
-                for bot, spk2 in zip(chatbot_reply_decoded, spk2_reply_decoded):
-                    print(bot, spk2)
+                for dialogue, spk2 in zip(input_ids_decoded, spk2_reply_decoded):
+                    print("\n#########################")
+                    print(
+                        dialogue.replace(tokenizer.eos_token, "\n").replace(
+                            tokenizer.pad_token, ""
+                        )
+                    )
+                    print(spk2)
 
             if i_batch % args.step_save == 0:
                 torch.save(
@@ -160,10 +163,10 @@ class ARG_BOT:
         # ..., interlocutor, chatbot
         self.history_turn = 1
 
-        self.history_max_length = 30
+        self.history_max_length = 40
         self.device = "cuda"
         self.no_sample = False
-        self.max_length = 30
+        self.max_length = 40
         self.min_length = 1
         self.seed = 2
         self.temperature = 1
@@ -186,12 +189,12 @@ def main():
     parser.add_argument("--epoch", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--save_dir", type=str, default="model/")
-    parser.add_argument("--model_name", type=str, default="dialo_one")
+    parser.add_argument("--model_name", type=str, default="dialogpt_1turn_lr1-5")
 
     # steps
-    parser.add_argument("--step_optimize", type=int, default=2)
-    parser.add_argument("--step_sample", type=int, default=100)
-    parser.add_argument("--step_save", type=int, default=500)
+    parser.add_argument("--step_optimize", type=int, default=3)
+    parser.add_argument("--step_sample", type=int, default=500)
+    parser.add_argument("--step_save", type=int, default=2000)
 
     args = parser.parse_args()
     args_bot = ARG_BOT(args.batch_size)
@@ -212,6 +215,8 @@ def main():
     # tokenizer.pad_token = tokenizer.eos_token
     tokenizer.pad_token = tokenizer.decode([0])
 
+    # TODO
+    # problem: why attention mask doesn't work? compare line 227, 228
     # history = [
     #     "good evening, how are you? <|endoftext|> coupons are awesome. how are you? <|endoftext|> i love coupon cutting. i detest school. <|endoftext|> you should coupon with me. saves a ton of money! <|endoftext|>"
     # ]
