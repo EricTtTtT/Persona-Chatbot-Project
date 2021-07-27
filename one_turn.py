@@ -101,18 +101,23 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
 
             # padding reply
             max_l = max((len(reply) for reply in chatbot_reply))
-            reply_tensor = []
+            input_append = []
+            mask_append = []
             for reply in chatbot_reply:
-                reply_tensor.append(
+                input_append.append(
                     [tokenizer.eos_token_id]
                     + reply
                     + [tokenizer.pad_token_id for _ in range(max_l - len(reply))]
                 )
-            reply_tensor = torch.tensor(reply_tensor)
-            input_ids = torch.cat((input_ids, reply_tensor), 1)
-            mask_append = torch.ones((args.batch_size, max_l + 1))  # +1 for eos_token
-            mask = torch.cat((mask, mask_append), 1)
+                mask_append.append(
+                    [1 for _ in range(len(reply) + 1)]
+                    + [0 for _ in range(max_l - len(reply))]
+                )
+            input_append = torch.tensor(input_append)
+            input_ids = torch.cat((input_ids, input_append), 1)
 
+            mask_append = torch.tensor(mask_append)
+            mask = torch.cat((mask, mask_append), 1)
             spk2_reply = generate_response(
                 input_ids, mask, tokenizer, interlocutor, args_bot
             )
@@ -139,8 +144,11 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
             if i_batch % args.step_sample == 0:
                 input_ids_decoded = tokenizer.batch_decode(input_ids)
                 spk2_reply_decoded = tokenizer.batch_decode(spk2_reply)
-                for dialogue, spk2 in zip(input_ids_decoded, spk2_reply_decoded):
+                for dialogue, spk2, sc in zip(
+                    input_ids_decoded, spk2_reply_decoded, score
+                ):
                     print("\n#########################")
+                    print(sc)
                     print(
                         dialogue.replace(tokenizer.eos_token, "\n").replace(
                             tokenizer.pad_token, ""
@@ -192,8 +200,8 @@ def main():
     parser.add_argument("--model_name", type=str, default="dialogpt_1turn_lr1-5")
 
     # steps
-    parser.add_argument("--step_optimize", type=int, default=3)
-    parser.add_argument("--step_sample", type=int, default=500)
+    parser.add_argument("--step_optimize", type=int, default=4)
+    parser.add_argument("--step_sample", type=int, default=200)
     parser.add_argument("--step_save", type=int, default=2000)
 
     args = parser.parse_args()
