@@ -69,6 +69,7 @@ def generate_response(input_ids, mask, tokenizer, model, args):
                 temp_sen[j].append(prev[j].item())
                 log_prob[j].append(log_p[j])
             continue
+            
 
         flag = 1
         for j in range(0, bt):
@@ -92,7 +93,7 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
 
     optimizer = AdamW(chatbot.parameters(), lr=1e-5, eps=1e-5)
     scheduler = get_linear_schedule_with_warmup(
-        optimizer, num_warmup_steps=500, num_training_steps=8000
+        optimizer, num_warmup_steps=2000, num_training_steps=8000
     )
 
     optimizer.zero_grad()
@@ -131,7 +132,7 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
             score = get_score(q_r, tokenizer)
             score_mean = sum(score) / len(score)
             running_score += score_mean
-
+            
             # calculate reward
             rewards = [sc - score_mean for sc in score]
             for r, log_p in zip(rewards, log_prob):
@@ -142,20 +143,16 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
 
             i_batch += 1
             if i_batch % args.step_optimize == 0:
-                loss = torch.tensor(
-                    running_loss / args.step_optimize, requires_grad=True
-                )
+                loss = torch.tensor(running_loss / args.step_optimize, requires_grad=True)
                 loss.backward()
 
-                torch.nn.utils.clip_grad_norm_(chatbot.parameters(), 5.0)
+                torch.nn.utils.clip_grad_norm_(chatbot.parameters(), 2.0)
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
 
                 writer.add_scalar("Train/Loss", loss, i_iter)
-                writer.add_scalar(
-                    "Train/Score", running_score / args.step_optimize, i_iter
-                )
+                writer.add_scalar("Train/Score", running_score / args.step_optimize, i_iter)
                 i_iter += 1
 
                 running_loss = 0
@@ -172,7 +169,17 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
                         )
                     )
                     print(spk2)
-
+                with open(args.sample_file, 'a') as f:
+                    f.write(f"\n\n\n{i_epoch} epoch, {i_batch} batch:\n")
+                    for dialogue, spk2 in zip(input_ids_decoded, spk2_reply_decoded):
+                        write_buffer = "\n#########################\n"
+                        write_buffer += (
+                            dialogue.replace(tokenizer.eos_token, "\n").replace(
+                                tokenizer.pad_token, ""
+                            )
+                        ) + "\n"
+                        write_buffer += spk2 + "\n"
+                        f.write(write_buffer)
             if i_batch % args.step_save == 0:
                 torch.save(
                     chatbot, os.path.join(args.model_folder, f"{i_epoch}epoch.bin")
@@ -212,19 +219,20 @@ def main():
     )
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--epoch", type=int, default=2)
-    parser.add_argument("--lr", type=float, default=1e-5)
+    parser.add_argument("--lr", type=float, default=1e-7)
     parser.add_argument("--save_dir", type=str, default="model/")
-    parser.add_argument("--model_name", type=str, default="dialogpt_1turn_lr1-5")
+    parser.add_argument("--model_name", type=str, default="dialogpt_1turn_lr1-7")
 
     # steps
-    parser.add_argument("--step_optimize", type=int, default=2)
+    parser.add_argument("--step_optimize", type=int, default=4)
     parser.add_argument("--step_sample", type=int, default=200)
-    parser.add_argument("--step_save", type=int, default=2000)
+    parser.add_argument("--step_save", type=int, default=1000)
 
     args = parser.parse_args()
     args_bot = ARG_BOT(args.batch_size)
 
     args.model_folder = os.path.join(args.work_space, args.save_dir, args.model_name)
+    args.sample_file = f"sample/sample_{args.model_name}.txt"
     os.makedirs(args.model_folder, exist_ok=True)
 
     # ===== prepare dataset, models and optimizer ==========
