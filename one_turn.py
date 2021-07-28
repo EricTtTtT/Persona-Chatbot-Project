@@ -3,7 +3,9 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 import os
+import math
 import random
+import logging
 import warnings
 
 from argparse import ArgumentParser
@@ -50,7 +52,8 @@ def generate_response(input_ids, mask, tokenizer, model, args):
     )
     mask_append = torch.tensor([[1] for i in range(bt)]).to(args.device)
     mask = torch.cat((mask, mask_append), 1)
-    temp_sen = [[] for i in range(bt)]
+    temp_sen = [[] for _ in range(bt)]
+    log_prob = [[] for _ in range(bt)]
 
     for i_word in range(args.max_length):
         logits, past = model(prev, past=past, attention_mask=mask)
@@ -59,10 +62,12 @@ def generate_response(input_ids, mask, tokenizer, model, args):
         probs = torch.softmax(logits, dim=-1)
 
         prev = torch.multinomial(probs, num_samples=1)
+        log_p = [math.log(p[idx]) for idx, p in zip(prev, probs)]
 
         if i_word == 0:
             for j in range(bt):
                 temp_sen[j].append(prev[j].item())
+                log_prob[j].append(log_p[j])
             continue
 
         flag = 1
@@ -70,13 +75,15 @@ def generate_response(input_ids, mask, tokenizer, model, args):
             if temp_sen[j][-1] != eos_id:
                 flag = 0
                 temp_sen[j].append(prev[j].item())
+                log_prob[j].append(log_p[j])
         if flag == 1:
             break
 
     for i in range(bt):
         if temp_sen[i][-1] == eos_id:
             temp_sen[i][:] = temp_sen[i][:-1]
-    return temp_sen
+            log_prob[i][:] = log_prob[i][:-1]
+    return temp_sen, log_prob
 
 
 def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
@@ -92,46 +99,53 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
     i_iter = 0
     for i_epoch in range(args.epoch):
         i_batch = 0
-        loss_sum = 0
+        running_loss = 0
+        running_score = 0
+
         for batch in tqdm(train_loader):
             input_ids, mask = batch
-            chatbot_reply = generate_response(
+            chatbot_reply, log_prob = generate_response(
                 input_ids, mask, tokenizer, chatbot, args_bot
             )
 
             # padding reply
             max_l = max((len(reply) for reply in chatbot_reply))
-            input_append = []
-            mask_append = []
+            reply_tensor = []
             for reply in chatbot_reply:
-                input_append.append(
+                reply_tensor.append(
                     [tokenizer.eos_token_id]
                     + reply
                     + [tokenizer.pad_token_id for _ in range(max_l - len(reply))]
                 )
-                mask_append.append(
-                    [1 for _ in range(len(reply) + 1)]
-                    + [0 for _ in range(max_l - len(reply))]
-                )
-            input_append = torch.tensor(input_append)
-            input_ids = torch.cat((input_ids, input_append), 1)
-
-            mask_append = torch.tensor(mask_append)
+            reply_tensor = torch.tensor(reply_tensor)
+            input_ids = torch.cat((input_ids, reply_tensor), 1)
+            mask_append = torch.ones((args.batch_size, max_l + 1))  # +1 for eos_token
             mask = torch.cat((mask, mask_append), 1)
-            spk2_reply = generate_response(
+
+            spk2_reply, _ = generate_response(
                 input_ids, mask, tokenizer, interlocutor, args_bot
             )
 
             # get engagin score
             q_r = [[q, r] for q, r in zip(chatbot_reply, spk2_reply)]
             score = get_score(q_r, tokenizer)
-            loss_sum -= sum(score) / len(score)
+            score_mean = sum(score) / len(score)
+            running_score += score_mean
+
+            # calculate reward
+            rewards = [sc - score_mean for sc in score]
+            for r, log_p in zip(rewards, log_prob):
+                if len(log_p) == 0:
+                    logging.info("Error! divided by 0 due to empty log_p")
+                    continue
+                running_loss -= r * sum(log_p) / len(log_p)
 
             i_batch += 1
             if i_batch % args.step_optimize == 0:
-                loss = torch.tensor(loss_sum / args.step_optimize, requires_grad=True)
+                loss = torch.tensor(
+                    running_loss / args.step_optimize, requires_grad=True
+                )
                 loss.backward()
-                loss_sum = 0
 
                 torch.nn.utils.clip_grad_norm_(chatbot.parameters(), 5.0)
                 optimizer.step()
@@ -139,16 +153,19 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
                 optimizer.zero_grad()
 
                 writer.add_scalar("Train/Loss", loss, i_iter)
+                writer.add_scalar(
+                    "Train/Score", running_score / args.step_optimize, i_iter
+                )
                 i_iter += 1
+
+                running_loss = 0
+                running_score = 0
 
             if i_batch % args.step_sample == 0:
                 input_ids_decoded = tokenizer.batch_decode(input_ids)
                 spk2_reply_decoded = tokenizer.batch_decode(spk2_reply)
-                for dialogue, spk2, sc in zip(
-                    input_ids_decoded, spk2_reply_decoded, score
-                ):
+                for dialogue, spk2 in zip(input_ids_decoded, spk2_reply_decoded):
                     print("\n#########################")
-                    print(sc)
                     print(
                         dialogue.replace(tokenizer.eos_token, "\n").replace(
                             tokenizer.pad_token, ""
@@ -200,7 +217,7 @@ def main():
     parser.add_argument("--model_name", type=str, default="dialogpt_1turn_lr1-5")
 
     # steps
-    parser.add_argument("--step_optimize", type=int, default=4)
+    parser.add_argument("--step_optimize", type=int, default=2)
     parser.add_argument("--step_sample", type=int, default=200)
     parser.add_argument("--step_save", type=int, default=2000)
 
