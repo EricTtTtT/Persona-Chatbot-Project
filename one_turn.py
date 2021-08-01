@@ -47,6 +47,7 @@ def generate_response(input_ids, mask, tokenizer, model, args, model_2=None, dev
         mask = mask.to(args.device_2)
         with torch.no_grad():
             _, past_2 = model_2(input_ids, past=None, attention_mask=mask)
+        input_ids = input_ids.to(args.device)
         mask = mask.to(device)
 
     prev = torch.LongTensor([[tokenizer.eos_token_id] for _ in range(bt)]).to(device)
@@ -108,11 +109,14 @@ def generate_response(input_ids, mask, tokenizer, model, args, model_2=None, dev
                     cont[j] = False
         if not (True in cont):
             break
-
+    
     for i in range(bt):
         if temp_sen[i][-1] == eos_id:
             temp_sen[i][:] = temp_sen[i][:-1]
             log_prob[i][:] = log_prob[i][:-1]
+    
+    del input_ids, mask, prev, mask_append
+    
 
     return temp_sen, log_prob, coherence_score
 
@@ -135,7 +139,6 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
         running_coherence = 0
 
         for batch in tqdm(train_loader):
-            os.system("nvidia-smi")
             input_ids, mask = batch
             chatbot_reply, log_prob, coherence_score = generate_response(
                 input_ids, mask, tokenizer, chatbot, args_bot,
@@ -170,12 +173,13 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
             running_coherence += sum(coherence_score) / len(coherence_score)
 
             # calculate reward
-            rewards = [sc - score_mean + coh_sc*args.weight_coherence for sc, coh_sc in zip(score, coherence_score)]
-            for r, log_p in zip(rewards, log_prob):
+            rewards = [sc - score_mean for sc in score]
+            # rewards = [sc - score_mean + coh_sc*args.weight_coherence for sc, coh_sc in zip(score, coherence_score)]
+            for r, log_p, coh_sc in zip(rewards, log_prob, coherence_score):
                 if len(log_p) == 0:
                     logging.info("Error! divided by 0 due to empty log_p")
                     continue
-                running_loss -= r * sum(log_p) / len(log_p)
+                running_loss -= r * sum(log_p) / len(log_p) + coh_sc 
 
             i_batch += 1
             if i_batch % args.step_optimize == 0:
@@ -238,11 +242,11 @@ class ARG_BOT:
         # ..., interlocutor, chatbot
         self.history_turn = 3
 
-        self.history_max_length = 100
+        self.history_max_length = 80
         self.device = "cuda:0"
         self.device_2 = "cuda:1"
         self.no_sample = False
-        self.max_length = 40
+        self.max_length = 30
         self.min_length = 1
         self.seed = 2
         self.temperature = 1
@@ -268,7 +272,7 @@ def main():
     parser.add_argument("--model_name", type=str, default="dialogpt_1turn_lr1-6")
 
     # weight
-    parser.add_argument("--weight_coherence", type=float, default=0.05)
+    parser.add_argument("--weight_coherence", type=float, default=0.2)
 
     # steps
     parser.add_argument("--step_optimize", type=int, default=4)
@@ -284,9 +288,9 @@ def main():
 
     # ===== prepare dataset, models and optimizer ==========
     # "microsoft/DialoGPT-medium"
-    tokenizer = AutoTokenizer.from_pretrained("microsoft/DialoGPT-medium")
-    chatbot = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-medium")
-    interlocutor = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-medium")
+    tokenizer = AutoTokenizer.from_pretrained(args.model_checkpoint)
+    chatbot = AutoModelForCausalLM.from_pretrained(args.model_checkpoint)
+    interlocutor = AutoModelForCausalLM.from_pretrained(args.model_checkpoint)
 
     chatbot.to(args_bot.device)
     interlocutor.to(args_bot.device_2)
