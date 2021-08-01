@@ -14,6 +14,7 @@ from itertools import chain, permutations
 from tqdm.auto import tqdm
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from transformers import (
     AdamW,
@@ -27,63 +28,93 @@ from train import get_data_loaders_DialoGPT
 from tensorboardX import SummaryWriter
 
 from Chatbot import get_score
-
-# device_0 = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-# device_1 = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+import gc
 
 writer = SummaryWriter("runs")
-# SPECIAL_TOKENS = ["<bos>", "<|eos|>", "<speaker1>", "<speaker2>", "<pad>"]
 
-temperature = 1
-
-
-def generate_response(input_ids, mask, tokenizer, model, args):
+def generate_response(input_ids, mask, tokenizer, model, args, model_2=None, device="cuda:0"):
     """
     Generate response without persona.
     """
     eos_id = tokenizer.eos_token_id
     bt = args.train_batch_size
 
-    input_ids = input_ids.to(args.device)
-    mask = mask.to(args.device)
-    _, past = model(input_ids, attention_mask=mask)
-    prev = torch.LongTensor([[tokenizer.eos_token_id] for _ in range(bt)]).to(
-        args.device
-    )
-    mask_append = torch.tensor([[1] for i in range(bt)]).to(args.device)
-    mask = torch.cat((mask, mask_append), 1)
+    input_ids = input_ids.to(device)
+    mask = mask.to(device)
+    _, past = model(input_ids, past=None, attention_mask=mask)
+    if model_2:
+        input_ids = input_ids.to(args.device_2)
+        mask = mask.to(args.device_2)
+        with torch.no_grad():
+            _, past_2 = model_2(input_ids, past=None, attention_mask=mask)
+        mask = mask.to(device)
+
+    prev = torch.LongTensor([[tokenizer.eos_token_id] for _ in range(bt)]).to(device)
+    mask_append = torch.tensor([[1] for i in range(bt)]).to(device)
     temp_sen = [[] for _ in range(bt)]
     log_prob = [[] for _ in range(bt)]
+    coherence_score = [0 for _ in range(bt)]
+    cont = [True for _ in range(bt)]
 
     for i_word in range(args.max_length):
-        logits, past = model(prev, past=past, attention_mask=mask)
         mask = torch.cat((mask, mask_append), 1)
+        logits, past = model(prev, past=past, attention_mask=mask)
         logits = logits.squeeze(0).squeeze(1)
-        probs = torch.softmax(logits, dim=-1)
+        logits = torch.softmax(logits, dim=-1)
 
-        prev = torch.multinomial(probs, num_samples=1)
-        log_p = [math.log(p[idx]) for idx, p in zip(prev, probs)]
+        if model_2:
+            mask = mask.to(args.device_2)
+            prev = prev.to(args.device_2)
+            with torch.no_grad():
+                logits_2, past_2 = model_2(prev, past=past_2, attention_mask=mask)
+                logits_2 = torch.softmax(logits_2.squeeze(0).squeeze(1), dim=-1)
+            mask = mask.to(device)
+            prev = prev.to(device)
+            
+
+        prev = torch.multinomial(logits, num_samples=1)
+        log_p = [math.log(p[idx]) for idx, p in zip(prev, logits)]
+        
+        if model_2:
+            # get average of probs_2
+            probs_2 = []
+            for j in range(bt):
+                if cont[j]:
+                    probs_2.append(logits_2[j][prev[j].item()].item())
+            if len(probs_2) == 0:
+                avg_prob_2 = 0
+            else:
+                avg_prob_2 = sum(probs_2) / len(probs_2)
+        
 
         if i_word == 0:
             for j in range(bt):
+                # print("\n##########")
+                # print(prev[j].item(), logits[j][prev[j].item()].item(), logits_2[j][prev[j].item()].item())
                 temp_sen[j].append(prev[j].item())
                 log_prob[j].append(log_p[j])
+                if model_2:
+                    coherence_score[j] += (logits_2[j][prev[j].item()].item() - avg_prob_2)
             continue
-
-        flag = 1
-        for j in range(0, bt):
-            if temp_sen[j][-1] != eos_id:
-                flag = 0
-                temp_sen[j].append(prev[j].item())
-                log_prob[j].append(log_p[j])
-        if flag == 1:
+        
+        for j in range(bt):
+            if cont[j]:
+                if temp_sen[j][-1] != eos_id:
+                    temp_sen[j].append(prev[j].item())
+                    log_prob[j].append(log_p[j])
+                    if model_2:
+                        coherence_score[j] += (logits_2[j][prev[j].item()].item() - avg_prob_2)
+                else:
+                    cont[j] = False
+        if not (True in cont):
             break
 
     for i in range(bt):
         if temp_sen[i][-1] == eos_id:
             temp_sen[i][:] = temp_sen[i][:-1]
             log_prob[i][:] = log_prob[i][:-1]
-    return temp_sen, log_prob
+
+    return temp_sen, log_prob, coherence_score
 
 
 def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
@@ -101,11 +132,14 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
         i_batch = 0
         running_loss = 0
         running_score = 0
+        running_coherence = 0
 
         for batch in tqdm(train_loader):
+            os.system("nvidia-smi")
             input_ids, mask = batch
-            chatbot_reply, log_prob = generate_response(
-                input_ids, mask, tokenizer, chatbot, args_bot
+            chatbot_reply, log_prob, coherence_score = generate_response(
+                input_ids, mask, tokenizer, chatbot, args_bot,
+                model_2=interlocutor, device=args_bot.device
             )
 
             # padding reply
@@ -122,8 +156,9 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
             mask_append = torch.ones((args.batch_size, max_l + 1))  # +1 for eos_token
             mask = torch.cat((mask, mask_append), 1)
 
-            spk2_reply, _ = generate_response(
-                input_ids, mask, tokenizer, interlocutor, args_bot
+            spk2_reply, _, coherence_score_spk2 = generate_response(
+                input_ids, mask, tokenizer, interlocutor, args_bot,
+                device=args_bot.device_2
             )
 
             # get engagin score
@@ -132,8 +167,10 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
             score_mean = sum(score) / len(score)
             running_score += score_mean
 
+            running_coherence += sum(coherence_score) / len(coherence_score)
+
             # calculate reward
-            rewards = [sc - score_mean for sc in score]
+            rewards = [sc - score_mean + coh_sc*args.weight_coherence for sc, coh_sc in zip(score, coherence_score)]
             for r, log_p in zip(rewards, log_prob):
                 if len(log_p) == 0:
                     logging.info("Error! divided by 0 due to empty log_p")
@@ -147,14 +184,17 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
                 )
                 loss.backward()
 
-                torch.nn.utils.clip_grad_norm_(chatbot.parameters(), 2.0)
+                torch.nn.utils.clip_grad_norm_(chatbot.parameters(), .2)
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
 
                 writer.add_scalar("Train/Loss", loss, i_iter)
                 writer.add_scalar(
-                    "Train/Score", running_score / args.step_optimize, i_iter
+                    "Train/Engaging_score", running_score / args.step_optimize, i_iter
+                )
+                writer.add_scalar(
+                    "Train/Coherence_score", running_coherence / args.step_optimize, i_iter
                 )
                 i_iter += 1
 
@@ -196,10 +236,11 @@ class ARG_BOT:
 
         # how many sentences in history, start from interlocutor
         # ..., interlocutor, chatbot
-        self.history_turn = 1
+        self.history_turn = 3
 
-        self.history_max_length = 40
-        self.device = "cuda"
+        self.history_max_length = 100
+        self.device = "cuda:0"
+        self.device_2 = "cuda:1"
         self.no_sample = False
         self.max_length = 40
         self.min_length = 1
@@ -222,9 +263,12 @@ def main():
     )
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--epoch", type=int, default=2)
-    parser.add_argument("--lr", type=float, default=1e-7)
+    parser.add_argument("--lr", type=float, default=1e-6)
     parser.add_argument("--save_dir", type=str, default="model/")
-    parser.add_argument("--model_name", type=str, default="dialogpt_1turn_lr1-7")
+    parser.add_argument("--model_name", type=str, default="dialogpt_1turn_lr1-6")
+
+    # weight
+    parser.add_argument("--weight_coherence", type=float, default=0.05)
 
     # steps
     parser.add_argument("--step_optimize", type=int, default=4)
@@ -240,42 +284,18 @@ def main():
 
     # ===== prepare dataset, models and optimizer ==========
     # "microsoft/DialoGPT-medium"
-    # tokenizer = AutoTokenizer.from_pretrained("microsoft/DialoGPT-medium")
-    # chatbot = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-medium")
-    tokenizer = AutoTokenizer.from_pretrained(args.model_checkpoint)
-    chatbot = AutoModelForCausalLM.from_pretrained(args.model_checkpoint)
-    interlocutor = AutoModelForCausalLM.from_pretrained(args.model_checkpoint)
+    tokenizer = AutoTokenizer.from_pretrained("microsoft/DialoGPT-medium")
+    chatbot = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-medium")
+    interlocutor = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-medium")
 
     chatbot.to(args_bot.device)
-    interlocutor.to(args_bot.device)
+    interlocutor.to(args_bot.device_2)
     # tokenizer.pad_token = tokenizer.eos_token
     tokenizer.pad_token = tokenizer.decode([0])
-
-    # TODO
-    # problem: why attention mask doesn't work? compare line 227, 228
-    # history = [
-    #     "good evening, how are you? <|endoftext|> coupons are awesome. how are you? <|endoftext|> i love coupon cutting. i detest school. <|endoftext|> you should coupon with me. saves a ton of money! <|endoftext|>"
-    # ]
-    # # length of history is 45
-    # h_enc = tokenizer(history, max_length=45, padding="max_length", return_tensors="pt")
-    # # h_enc = tokenizer(history, max_length=50, padding='max_length', return_tensors='pt')
-    # print(h_enc)
-    # input_ids = h_enc["input_ids"].to(args_bot.device)
-    # attention_mask = h_enc["attention_mask"].to(args_bot.device)
-    # outputs = chatbot.generate(
-    #     input_ids=input_ids,
-    #     attention_mask=attention_mask,
-    #     pad_token_id=0,
-    #     max_length=100,
-    #     do_sample=True,
-    # )
-    # print(tokenizer.batch_decode(outputs))
-    # exit()
 
     train_loader, val_loader, train_sampler, valid_sampler = get_data_loaders_DialoGPT(
         args_bot, tokenizer
     )
-
     del val_loader, train_sampler, valid_sampler
 
     train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot)
