@@ -32,7 +32,10 @@ import gc
 
 writer = SummaryWriter("runs")
 
-def generate_response(input_ids, mask, tokenizer, model, args, model_2=None, device="cuda:0"):
+
+def generate_response(
+    input_ids, mask, tokenizer, model, args, model_2=None, device="cuda:0"
+):
     """
     Generate response without persona.
     """
@@ -71,11 +74,10 @@ def generate_response(input_ids, mask, tokenizer, model, args, model_2=None, dev
                 logits_2 = torch.softmax(logits_2.squeeze(0).squeeze(1), dim=-1)
             mask = mask.to(device)
             prev = prev.to(device)
-            
 
         prev = torch.multinomial(logits, num_samples=1)
         log_p = [math.log(p[idx]) for idx, p in zip(prev, logits)]
-        
+
         if model_2:
             # get average of probs_2
             probs_2 = []
@@ -86,7 +88,6 @@ def generate_response(input_ids, mask, tokenizer, model, args, model_2=None, dev
                 avg_prob_2 = 0
             else:
                 avg_prob_2 = sum(probs_2) / len(probs_2)
-        
 
         if i_word == 0:
             for j in range(bt):
@@ -95,28 +96,31 @@ def generate_response(input_ids, mask, tokenizer, model, args, model_2=None, dev
                 temp_sen[j].append(prev[j].item())
                 log_prob[j].append(log_p[j])
                 if model_2:
-                    coherence_score[j] += (logits_2[j][prev[j].item()].item() - avg_prob_2)
+                    coherence_score[j] += (
+                        logits_2[j][prev[j].item()].item() - avg_prob_2
+                    )
             continue
-        
+
         for j in range(bt):
             if cont[j]:
                 if temp_sen[j][-1] != eos_id:
                     temp_sen[j].append(prev[j].item())
                     log_prob[j].append(log_p[j])
                     if model_2:
-                        coherence_score[j] += (logits_2[j][prev[j].item()].item() - avg_prob_2)
+                        coherence_score[j] += (
+                            logits_2[j][prev[j].item()].item() - avg_prob_2
+                        )
                 else:
                     cont[j] = False
         if not (True in cont):
             break
-    
+
     for i in range(bt):
         if temp_sen[i][-1] == eos_id:
             temp_sen[i][:] = temp_sen[i][:-1]
             log_prob[i][:] = log_prob[i][:-1]
-    
+
     del input_ids, mask, prev, mask_append
-    
 
     return temp_sen, log_prob, coherence_score
 
@@ -141,8 +145,13 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
         for batch in tqdm(train_loader):
             input_ids, mask = batch
             chatbot_reply, log_prob, coherence_score = generate_response(
-                input_ids, mask, tokenizer, chatbot, args_bot,
-                model_2=interlocutor, device=args_bot.device
+                input_ids,
+                mask,
+                tokenizer,
+                chatbot,
+                args_bot,
+                model_2=interlocutor,
+                device=args_bot.device,
             )
 
             # padding reply
@@ -160,8 +169,12 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
             mask = torch.cat((mask, mask_append), 1)
 
             spk2_reply, _, coherence_score_spk2 = generate_response(
-                input_ids, mask, tokenizer, interlocutor, args_bot,
-                device=args_bot.device_2
+                input_ids,
+                mask,
+                tokenizer,
+                interlocutor,
+                args_bot,
+                device=args_bot.device_2,
             )
 
             # get engagin score
@@ -179,7 +192,9 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
                 if len(log_p) == 0:
                     logging.info("Error! divided by 0 due to empty log_p")
                     continue
-                running_loss -= r * sum(log_p) / len(log_p) + coh_sc 
+                running_loss -= r * sum(log_p) / len(log_p)
+                if coh_sc < args.threshold_coherence:
+                    running_loss -= coh_sc
 
             i_batch += 1
             if i_batch % args.step_optimize == 0:
@@ -188,7 +203,7 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
                 )
                 loss.backward()
 
-                torch.nn.utils.clip_grad_norm_(chatbot.parameters(), .2)
+                torch.nn.utils.clip_grad_norm_(chatbot.parameters(), 0.5)
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
@@ -198,7 +213,9 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
                     "Train/Engaging_score", running_score / args.step_optimize, i_iter
                 )
                 writer.add_scalar(
-                    "Train/Coherence_score", running_coherence / args.step_optimize, i_iter
+                    "Train/Coherence_score",
+                    running_coherence / args.step_optimize,
+                    i_iter,
                 )
                 i_iter += 1
 
@@ -240,7 +257,7 @@ class ARG_BOT:
 
         # how many sentences in history, start from interlocutor
         # ..., interlocutor, chatbot
-        self.history_turn = 3
+        self.history_turn = 5
 
         self.history_max_length = 80
         self.device = "cuda:0"
@@ -269,10 +286,11 @@ def main():
     parser.add_argument("--epoch", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1e-6)
     parser.add_argument("--save_dir", type=str, default="model/")
-    parser.add_argument("--model_name", type=str, default="dialogpt_1turn_lr1-6")
+    parser.add_argument("--model_name", type=str, default="dialogpt_1turn_lr1-6_w2_th0")
 
-    # weight
+    # parameters
     parser.add_argument("--weight_coherence", type=float, default=0.2)
+    parser.add_argument("--threshold_coherence", type=float, default=0)
 
     # steps
     parser.add_argument("--step_optimize", type=int, default=4)
