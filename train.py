@@ -198,6 +198,102 @@ def get_data_loaders(args, tokenizer):
     return train_loader, valid_loader, train_sampler, valid_sampler
 
 
+def get_data_loaders_persona(args, tokenizer):
+    """Prepare the dataset for training and evaluation"""
+    personachat = get_dataset(tokenizer, args.dataset_path, args.dataset_cache)
+
+    logger.info("Build inputs and labels")
+    datasets = {"train": defaultdict(list), "valid": defaultdict(list)}
+
+    bos, eos, speaker1, speaker2, pad = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)
+
+    for dataset_name, dataset in personachat.items():
+        for dialog in dataset:
+            persona = dialog["personality"].copy()
+            persona = [persona[0]]
+            for utterance in dialog["utterances"]:
+                # remove too short datum
+                if len(utterance["history"]) < args.history_turn + 1:
+                    continue
+
+                # remain bot response for further comparison
+                history = utterance["history"][-(args.history_turn + 1) : -1]
+
+                # remove too long datum
+                if len(history) > args.history_max_length:
+                    continue
+
+                # store length of each sentence in history for building multi-turn input tensor
+                lens = [len(persona)]
+                for h in history:
+                    lens.append(len(h))
+                history = list(chain(*history))
+                dataset[dataset_name]["history"].append(history)
+                dataset[dataset_name]["persona"].append(persona)
+                dataset[dataset_name]["length"].append(lens)
+
+                # sequence = ([[bos] + list(chain(*persona))] + history)
+                # sequence = [sequence[0]] + [
+                #     [speaker2 if (len(sequence) - i) % 2 else speaker1] + s
+                #     for i, s in enumerate(sequence[1:])
+                # ]
+                # input_ids = list(chain(*sequence))
+
+    logger.info("Pad inputs and convert to Tensor")
+    tensor_datasets = {"train": [], "valid": []}
+    names = ["history", "persona", "length"]
+    for dataset_name, dataset in datasets.items():
+        # padding input max_l
+        max_len = [args.history_max_length]
+        max_len.append(max([len(x) for x in dataset["persona"]]))
+        max_len.append(1 + args.history_turn)
+        for name, max_l in zip(names, max_len):
+            dataset[name] = [x + [pad] * (max_l - len(x)) for x in dataset[name]]
+        for name in names:
+            tensor = torch.tensor(dataset[name])
+            print(dataset_name, name, tensor.shape)
+            tensor_datasets[dataset_name].append(tensor)
+
+    logger.info("Build train and validation dataloaders")
+    train_dataset, valid_dataset = TensorDataset(
+        *tensor_datasets["train"]
+    ), TensorDataset(*tensor_datasets["valid"])
+    train_sampler = (
+        torch.utils.data.distributed.DistributedSampler(train_dataset)
+        if args.distributed
+        else None
+    )
+    valid_sampler = (
+        torch.utils.data.distributed.DistributedSampler(valid_dataset)
+        if args.distributed
+        else None
+    )
+    train_loader = DataLoader(
+        train_dataset,
+        sampler=train_sampler,
+        batch_size=args.train_batch_size,
+        shuffle=(not args.distributed),
+    )
+    valid_loader = DataLoader(
+        valid_dataset,
+        sampler=valid_sampler,
+        batch_size=args.valid_batch_size,
+        shuffle=False,
+    )
+
+    logger.info(
+        "Train dataset (Batch, Candidates, Seq length): {}".format(
+            train_dataset.tensors[0].shape
+        )
+    )
+    logger.info(
+        "Valid dataset (Batch, Candidates, Seq length): {}".format(
+            valid_dataset.tensors[0].shape
+        )
+    )
+    return train_loader, valid_loader, train_sampler, valid_sampler
+
+
 def get_data_loaders_DialoGPT(args, tokenizer):
     """Prepare the dataset for training and evaluation"""
     dataset_chat = get_dataset(
