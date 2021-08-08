@@ -53,8 +53,14 @@ def generate_response(persona, history, length, tokenizer, model, arg):
     special_tokens_ids = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)
     bos, eos, speaker1, speaker2, pad = special_tokens_ids
 
+    print(persona)
+    print(history)
+    print(length)
+    exit()
+
     # build input sequence
 
+    """
     _, past = model(sequence_bt, attention_mask=mask, token_type_ids=token_type_ids_bt)
 
     token_tp = torch.LongTensor(
@@ -103,6 +109,7 @@ def generate_response(persona, history, length, tokenizer, model, arg):
         if temp_sen[i][-1] == eos:
             temp_sen[i][:] = temp_sen[i][:-1]
     return temp_sen
+    """
 
 
 def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
