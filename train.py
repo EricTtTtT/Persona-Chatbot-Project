@@ -200,7 +200,9 @@ def get_data_loaders(args, tokenizer):
 
 def get_data_loaders_persona(args, tokenizer):
     """Prepare the dataset for training and evaluation"""
-    personachat = get_dataset(tokenizer, args.dataset_path, args.dataset_cache)
+    personachat = get_dataset(
+        tokenizer, args.dataset_path, args.dataset_cache + "_persona"
+    )
 
     logger.info("Build inputs and labels")
     datasets = {"train": defaultdict(list), "valid": defaultdict(list)}
@@ -210,7 +212,6 @@ def get_data_loaders_persona(args, tokenizer):
     for dataset_name, dataset in personachat.items():
         for dialog in dataset:
             persona = dialog["personality"].copy()
-            persona = [persona[0]]
             for utterance in dialog["utterances"]:
                 # remove too short datum
                 if len(utterance["history"]) < args.history_turn + 1:
@@ -219,36 +220,39 @@ def get_data_loaders_persona(args, tokenizer):
                 # remain bot response for further comparison
                 history = utterance["history"][-(args.history_turn + 1) : -1]
 
+                lens_persona = [len(p) for p in persona]
+                lens_history = [len(h) for h in history]
+
                 # remove too long datum
+                persona_list = list(chain(*persona))
+                if len(persona_list) > args.persona_max_length:
+                    continue
+                history = list(chain(*history))
                 if len(history) > args.history_max_length:
                     continue
 
-                # store length of each sentence in history for building multi-turn input tensor
-                lens = [len(persona)]
-                for h in history:
-                    lens.append(len(h))
-                history = list(chain(*history))
-                dataset[dataset_name]["history"].append(history)
-                dataset[dataset_name]["persona"].append(persona)
-                dataset[dataset_name]["length"].append(lens)
+                datasets[dataset_name]["persona"].append(persona_list)
+                datasets[dataset_name]["history"].append(history)
+                datasets[dataset_name]["length_persona"].append(lens_persona)
+                datasets[dataset_name]["length_history"].append(lens_history)
 
-                # sequence = ([[bos] + list(chain(*persona))] + history)
-                # sequence = [sequence[0]] + [
-                #     [speaker2 if (len(sequence) - i) % 2 else speaker1] + s
-                #     for i, s in enumerate(sequence[1:])
-                # ]
-                # input_ids = list(chain(*sequence))
+                persona = [persona[-1]] + persona[:-1]
 
     logger.info("Pad inputs and convert to Tensor")
     tensor_datasets = {"train": [], "valid": []}
-    names = ["history", "persona", "length"]
+    names = ["persona", "history", "length_persona", "length_history"]
     for dataset_name, dataset in datasets.items():
-        # padding input max_l
-        max_len = [args.history_max_length]
-        max_len.append(max([len(x) for x in dataset["persona"]]))
-        max_len.append(1 + args.history_turn)
-        for name, max_l in zip(names, max_len):
-            dataset[name] = [x + [pad] * (max_l - len(x)) for x in dataset[name]]
+        # padding input
+        max_length = [
+            args.persona_max_length,
+            args.history_max_length,
+            5,
+            args.history_turn,
+        ]
+        padding = [pad, pad, 0, 0]
+        for name, max_l, p in zip(names, max_length, padding):
+            dataset[name] = [x + [p] * (max_l - len(x)) for x in dataset[name]]
+
         for name in names:
             tensor = torch.tensor(dataset[name])
             print(dataset_name, name, tensor.shape)

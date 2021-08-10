@@ -1,0 +1,127 @@
+###### sample 0: engaging score 0.06264850497245789
+i own a car.i love dogs.i am a girl.i love sushi.
+i'm pretty good, too. do you like sushi? i love it.
+its alright do you wear glasses?
+no. do you? i own my own car, do you?
+dogs are i loved to be around long time
+exactly, you said that while i am sitting on the couch?
+
+###### sample 1: engaging score 0.08704818040132523
+i love to do yoga.my favorite color is grey.i am single.my passion is writing.
+hi, i am very single. i was hoping to meet someone tonight.
+what time is your date? i'm also a writer for new york times
+no dates for me. but i love to write, it is my passion.
+okay. i need a break because of the whole yoga
+? ergonomics video for single but guru yoga is no match
+
+###### sample 2: engaging score 0.9387495517730713
+my favorite music is rock and roll.i love to travel.i'm from russia.i enjoy skiing.i go to school for business.
+i am well. how about you? any big plans for the weekend?
+well, i am a pretty unsociable male but i plan on attending a convention.
+that might be nice. i enjoy traveling so may do something
+do you know any cool russian friends? i enjoy traveling there.
+hmmm. i think i can speak great russian. do you know any russian food?
+
+###### sample 3: engaging score 0.937151312828064
+my mom died when i was six.i have purple hair.my favorite book is the tale of genji.i'm a petsitter.
+iowa here, not a lot going on here. where do you work?
+work out of my home as a writer. how many pets have you?
+i cant have pets, so i watch others. i live in foster care.
+so you have all of color? i love that color. did you put money towards it?
+i have been looking for a turf for my hair and wanted a purple one!
+
+###### sample 4: engaging score 0.9425321817398071
+i enjoy spending time with family and friends.i am a strong woman.i travel a lot.i am married.i like doing art projects.
+carrots. what about you?
+beets are my favorite. what do you do for work?
+i work as an auditor and have to travel quite a lot. yourself?
+do you have any hobbies?
+what do you do for a living?
+
+###### sample 5: engaging score 0.061570994555950165
+i like to eat spaghetti.my newest car is a chevy.i live in california.my favorite thing to do is read.
+i have several in my animal book collection
+great, i will keep writing my e book. i just think people shouldn't own wolves as pets
+i need to get a new cat
+me too i love only baby food
+my favorite food is spaghetti, fresh sale. i love it so much
+
+###### sample 6: engaging score 0.06114982068538666
+i am really short.i've won tap dance competitions.my favorite book is david copperfield.i've a twin brother.
+i wo not laugh. i like reading, my all time favorite is david copperfield.
+cool! he is a great magician!
+what do you do for a living?
+r i make a beautiful big birthday cake this morning.
+ayy any brothers or sisters?
+
+###### sample 7: engaging score 0.06704969704151154
+i read three books a week.i dropped out of high school.i learned how to reads when i was three.i love to read.
+where do you work? i should look for a job since i dropped out of school.
+i'm a football coach.
+that is a good job. i played football in high school before i dropped out.
+football we must play again. can we run the ball?
+so tell me another interesting fact
+
+###### sample 8: engaging score 0.10578150302171707
+i ve a flower garden.i owe two laptops.i love chocolate.i love watching anime.my grandparents are dead.
+maybe watch some anime and play with my new laptop.
+sounds fun, do you have plans for the morning?
+going to put flowers on my grandparents grave. you?
+that sounds amazing. i love flowers so i am thinking chocolate
+whew! and that is perfect, i gotta go pick up my breakfast
+
+###### sample 9: engaging score 0.06116313114762306
+i'm a teacher.i love chocolate.i do yoga every morning.i drink coffee every day.i have a twin sister.
+that sounds delicious. is spaghetti your favorite food? mine is chocolate.
+yes that's my favorite with coffee as a drink.
+i love coffee too! i have to have a cup each morning before work.
+mm. coffee chocolate milk chocolate milk toy?
+my twin is a teacher and says milk truck dairy truck
+
+###### sample 10: engaging score 0.5285829901695251
+i like the guitar.i am a vegan.i like music.i like to skateboard.
+most candy has some form of dairy. as a vegan i can not have that.
+i eat a lot of candy and soda, that is why i'm now 300 pounds.
+you should try skateboarding, it could help you lose weight.
+do people think like that kind of exercise is healthy
+are we going to ride bikes today
+
+###### sample 11: engaging score 0.8347168564796448
+i love country music.i love animals.i love dancing.i am a vegan.i've a farm with pigs, horses and hens.
+it is. i love working wit animals.
+i do not have any animals.
+that is not fun. animals are always good to have around.
+come where are you from
+pets do you have any animals
+
+###### sample 12: engaging score 0.9382843375205994
+i enjoy cooking.i'm married.my favorite writer is nicholas sparks.i own a cleaning company.
+cool, i want to reread the notebook
+my poodle nanette and i just watched that movie!
+i hope i can get out of work tomorrow
+no way. are you a good cook homie?
+what is up with your change?
+
+###### sample 13: engaging score 0.07162634283304214
+i've two older brothers.i'm a freshman at nyu.i am the youngest in my family.my favorite color is blue.
+they make good family. i visited ireland couple years ago with my 2 older brothers. great trip!
+did you bring back any souvenirs?
+yes, a blue irish gem. my favorite color. i still have it on my desk too.
+cool. what else are you up to?
+nothing much just finished feeling pretty good about both my older brothers
+
+###### sample 14: engaging score 0.9080870151519775
+i need a corvette to complete my life.i m always hungry.i work too many hours in a week.i m insecure.
+me too but i never have time to watch it. always work, work, work
+but what can you do? maybe leave it all behind?
+maybe but i think a corvette would make it all better
+so what do you do?
+what can you do for dinner?
+
+###### sample 15: engaging score 0.20412741601467133
+i am a writer.i like rock climbing.i have a dog.i am gluten free.my hair is black.
+ugh. mornings are horrid. i prefer the night.
+it is easier to see my car engine in the morning. what is your hobby?
+rock climbing, developing gluten free recipes, dying my hair which is black.
+it is a passion and you will know as well if you do not include gluten free ice cream today!
+toma los angeles. what state? ll are you in la?

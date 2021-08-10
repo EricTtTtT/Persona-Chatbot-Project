@@ -6,14 +6,11 @@ import os
 import random
 import logging
 import warnings
-import matplotlib.pyplot as plt
 from os.path import join
 from itertools import chain
 from argparse import ArgumentParser
 
-from pprint import pformat
 from tqdm import tqdm
-import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -39,29 +36,56 @@ from train import (
 
 from Engaging_classifier import analyze_engagement
 from Persona_Selector import prepare_persona_selector, select_persona
+
 from tensorboardX import SummaryWriter
 
-# from collections import defaultdict
-# from torch.utils.data import DataLoader, TensorDataset
-# from utils import get_dataset, download_pretrained_model, top_filtering
-
 writer = SummaryWriter("runs")
-SPECIAL_TOKENS = ["<bos>", "<|eos|>", "<speaker1>", "<speaker2>", "<pad>"]
 
 
-def generate_response(persona, history, length, tokenizer, model, arg):
+def generate_response(personality, history, tokenizer, model, arg):
     special_tokens_ids = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)
     bos, eos, speaker1, speaker2, pad = special_tokens_ids
 
-    print(persona)
-    print(history)
-    print(length)
-    exit()
+    sequence = [
+        [[bos] + persona_i] + history_i
+        for persona_i, history_i in zip(personality, history)
+    ]
+    sequence = [
+        [seq[0]]
+        + [
+            [speaker2 if (len(seq) - i) % 2 else speaker1] + s
+            for i, s in enumerate(seq[1:])
+        ]
+        for seq in sequence
+    ]
+    token_type_ids = [
+        [speaker2 if i % 2 else speaker1 for i, s in enumerate(seq) for _ in s]
+        for seq in sequence
+    ]
+    sequence = [list(chain(*seq)) for seq in sequence]
+    mask_len = [len(x) for x in sequence]
+    mass = []
+    for i in range(len(sequence)):
+        m = [1 for j in range(mask_len[i])]
+        mass.append(m[:])
 
-    # build input sequence
+    # padding input
+    sequence = pad_sequence(
+        [torch.LongTensor(x) for x in sequence],
+        batch_first=True,
+        padding_value=tokenizer.encode("<pad>")[0],
+    ).to(arg.device)
+    token_type_ids = pad_sequence(
+        [torch.LongTensor(x) for x in token_type_ids],
+        batch_first=True,
+        padding_value=speaker1,
+    ).to(arg.device)
+    mask = pad_sequence(
+        [torch.LongTensor(x) for x in mass], batch_first=True, padding_value=0
+    ).to(arg.device)
 
-    """
-    _, past = model(sequence_bt, attention_mask=mask, token_type_ids=token_type_ids_bt)
+    # get past for model
+    _, past = model(sequence, attention_mask=mask, token_type_ids=token_type_ids)
 
     token_tp = torch.LongTensor(
         [[speaker2] if len(x) % 2 else [speaker1] for x in history]
@@ -71,17 +95,14 @@ def generate_response(persona, history, length, tokenizer, model, arg):
     ).to(arg.device)
 
     temp_sen = [[] for i in range(len(history))]
+    word_probs = [[] for i in range(len(history))]
+
     for i_word in range(arg.max_length):
         logits, past = model(prev, token_type_ids=token_tp, past=past)
         logits = logits.squeeze(0).squeeze(1)
-        # logits = top_filtering(logits, top_k=arg.top_k, top_p=arg.top_p)
-
-        # Apply temperature
-        # probs = torch.softmax(logits, dim=-1)
-        probs = torch.softmax(logits / arg.temperature, dim=-1)
+        probs = torch.softmax(logits, dim=-1)
 
         prev = torch.multinomial(probs, num_samples=1)
-        # prev = [torch.topk(prob_i, 1)[1] if arg.no_sample else torch.multinomial(prob_i, 1) for prob_i in probs]
         for prev_i, prob_i in zip(prev, probs):
             if i_word < arg.min_length and prev_i.item() in special_tokens_ids:
                 while prev_i.item() in special_tokens_ids:
@@ -92,24 +113,27 @@ def generate_response(persona, history, length, tokenizer, model, arg):
                         break  # avoid infinitely looping over special token
                     prev_i = torch.multinomial(prob_i, num_samples=1)
 
+        # initial case
         if i_word == 0:
-            for j in range(len(history)):
+            for j, prob in enumerate(probs):
                 temp_sen[j].append(prev[j].item())
+                word_probs[j].append(prob[prev[j].item()].item())
             continue
-        flag = 1
 
-        for j in range(0, len(history)):
+        flag = 1
+        for j, prob in enumerate(probs):
             if temp_sen[j][-1] not in special_tokens_ids:
                 flag = 0
                 temp_sen[j].append(prev[j].item())
+                word_probs[j].append(prob[prev[j].item()].item())
         if flag == 1:
             break
 
     for i in range(len(temp_sen)):
         if temp_sen[i][-1] == eos:
             temp_sen[i][:] = temp_sen[i][:-1]
-    return temp_sen
-    """
+            word_probs[i][:] = word_probs[i][:-1]
+    return temp_sen, word_probs
 
 
 def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
@@ -130,51 +154,44 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
         running_coherence = 0
 
         for batch in tqdm(train_loader):
-            persona, history, length = batch
-            (
-                chatbot_reply,
-                log_prob,
-                coherence_score,
-                coherence_loss,
-            ) = generate_response(
-                persona,
-                history,
-                length,
-                tokenizer,
-                chatbot,
-                args_bot,
-                model_2=interlocutor,
-                device=args_bot.device,
+            persona_spk2_ori, history_ori, len_p, len_h = batch
+            persona_spk2 = []
+            for p_ori, lens in zip(persona_spk2_ori, len_p):
+                l = sum(lens)
+                persona_spk2.append(p_ori[:l].tolist())
+            history = []
+            for h_ori, lens in zip(history_ori, len_h):
+                tmp = []
+                j = 0
+                for l in lens:
+                    if l > 0:
+                        tmp.append((h_ori[j : j + l]).tolist())
+                        j += l
+                history.append(tmp)
+
+            # get chatbot persona
+            persona_bot = [[] for _ in range(args.batch_size)]
+
+            bot_reply, bot_probs = generate_response(
+                persona_bot, history, tokenizer, chatbot, args_bot
             )
+            history = [h + [r] for h, r in zip(history, bot_reply)]
+
+            spk2_reply, spk2_probs = generate_response(
+                persona_spk2, history, tokenizer, interlocutor, args_bot
+            )
+
+            q_r = [[his[-1], r] for his, r in zip(history, spk2_reply)]
+            score = get_score(q_r, tokenizer)
+
+            # print samples
+            for j, sc in enumerate(score):
+                print(f"\n###### sample {j}: engaging score {sc}")
+                print(tokenizer.decode(persona_spk2[j]))
+                for h in history[j]:
+                    print(tokenizer.decode(h))
+                print(tokenizer.decode(spk2_reply[j]))
             exit()
-
-            # padding reply
-            max_l = max((len(reply) for reply in chatbot_reply))
-            reply_tensor = []
-            for reply in chatbot_reply:
-                reply_tensor.append(
-                    [tokenizer.eos_token_id]
-                    + reply
-                    + [tokenizer.pad_token_id for _ in range(max_l - len(reply))]
-                )
-            reply_tensor = torch.tensor(reply_tensor)
-            input_ids = torch.cat((input_ids, reply_tensor), 1)
-            mask_append = torch.ones((args.batch_size, max_l + 1))  # +1 for eos_token
-            mask = torch.cat((mask, mask_append), 1)
-
-            (
-                spk2_reply,
-                _,
-                coherence_score_spk2,
-                coherence_loss_spk2,
-            ) = generate_response(
-                input_ids,
-                mask,
-                tokenizer,
-                interlocutor,
-                args_bot,
-                device=args_bot.device_2,
-            )
 
             # get engagin score
             q_r = [[q, r] for q, r in zip(chatbot_reply, spk2_reply)]
@@ -261,7 +278,8 @@ def prepare_chatbot(check_point, bt=8, root="."):
             )
             self.dataset_cache = os.path.join(root, "data/dataset_cache")
             self.history_turn = 3
-            self.history_max_length = 80
+            self.history_max_length = 50
+            self.persona_max_length = 30
             self.device = "cuda:0"
             self.device_2 = "cuda:0"
             self.no_sample = False

@@ -49,43 +49,41 @@ writer = SummaryWriter("runs")
 SPECIAL_TOKENS = ["<bos>", "<|eos|>", "<speaker1>", "<speaker2>", "<pad>"]
 
 
-def generate_response(personality, history, tokenizer, model, arg, current_output=None):
+def generate_response(personality, history, tokenizer, model, arg):
     special_tokens_ids = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)
 
     bos, eos, speaker1, speaker2, pad = special_tokens_ids
-    if current_output is None:
-        current_output = [[] for _ in range(arg.train_batch_size)]
 
-    sequence_bt = [
+    sequence = [
         [[bos] + persona_i] + history_i
         for persona_i, history_i in zip(personality, history)
     ]
-    sequence_bt = [
+    sequence = [
         [seq[0]]
         + [
             [speaker2 if (len(seq) - i) % 2 else speaker1] + s
             for i, s in enumerate(seq[1:])
         ]
-        for seq in sequence_bt
+        for seq in sequence
     ]
-    token_type_ids_bt = [
+    token_type_ids = [
         [speaker2 if i % 2 else speaker1 for i, s in enumerate(seq) for _ in s]
-        for seq in sequence_bt
+        for seq in sequence
     ]
-    sequence_bt = [list(chain(*seq)) for seq in sequence_bt]
-    mask_len = [len(x) for x in sequence_bt]
+    sequence = [list(chain(*seq)) for seq in sequence]
+    mask_len = [len(x) for x in sequence]
     mass = []
-    for i in range(len(sequence_bt)):
+    for i in range(len(sequence)):
         m = [1 for j in range(mask_len[i])]
         mass.append(m[:])
 
-    sequence_bt = pad_sequence(
-        [torch.LongTensor(x) for x in sequence_bt],
+    sequence = pad_sequence(
+        [torch.LongTensor(x) for x in sequence],
         batch_first=True,
         padding_value=tokenizer.encode("<pad>")[0],
     ).to(arg.device)
-    token_type_ids_bt = pad_sequence(
-        [torch.LongTensor(x) for x in token_type_ids_bt],
+    token_type_ids = pad_sequence(
+        [torch.LongTensor(x) for x in token_type_ids],
         batch_first=True,
         padding_value=speaker1,
     ).to(arg.device)
@@ -93,7 +91,7 @@ def generate_response(personality, history, tokenizer, model, arg, current_outpu
         [torch.LongTensor(x) for x in mass], batch_first=True, padding_value=0
     ).to(arg.device)
 
-    _, past = model(sequence_bt, attention_mask=mask, token_type_ids=token_type_ids_bt)
+    _, past = model(sequence, attention_mask=mask, token_type_ids=token_type_ids)
 
     token_tp = torch.LongTensor(
         [[speaker2] if len(x) % 2 else [speaker1] for x in history]

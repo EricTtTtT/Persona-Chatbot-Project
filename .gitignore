@@ -1,6 +1,5 @@
 data/
 model/
 runs/
-record/*.txt
 __pycache__/
 event*
