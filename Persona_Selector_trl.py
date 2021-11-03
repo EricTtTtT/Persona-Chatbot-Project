@@ -8,7 +8,8 @@ import torch.nn.functional as F
 from torch.distributions import Categorical
 
 from transformers import BertTokenizer, BertModel
-
+from trl.gpt2 import GPT2HeadWithValueModel, respond_to_batch
+from trl.ppo import PPOTrainer
 device = torch.device("cuda:0")
 selector_history = 5
 
@@ -105,13 +106,13 @@ class PersonaSelector(nn.Module):
         
 
 
-def prepare_persona_selector() :
+def prepare_persona_selector(bert_model, lr, load_path="" ):
     # ==========Training Prepare===========================
-    # persona_selector = PersonaSelector(bert_model, lr)
-    # if load_path != "":
-    #     persona_selector = torch.load(load_path)
-    # persona_selector.cuda()
-    # persona_selector.train()
+    persona_selector = PersonaSelector(bert_model, lr)
+    if load_path != "":
+        persona_selector = torch.load(load_path)
+    persona_selector.cuda()
+    persona_selector.train()
     # persona_selector.id_selector.train()
 
     # ==========setting IO=================================
@@ -132,7 +133,7 @@ def prepare_persona_selector() :
     print("total # of persona: ", len(persona_set))
     persona_pool = sorted(list(persona_set))
 
-    return persona_pool
+    return persona_selector, persona_pool
 
 
 def select_persona(

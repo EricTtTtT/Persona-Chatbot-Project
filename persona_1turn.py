@@ -112,7 +112,7 @@ def generate_response(personality, history, tokenizer, model, arg):
                         )
                         break  # avoid infinitely looping over special token
                     prev_i = torch.multinomial(prob_i, num_samples=1)
-
+        
         # initial case
         if i_word == 0:
             for j, prob in enumerate(probs):
@@ -134,7 +134,6 @@ def generate_response(personality, history, tokenizer, model, arg):
             temp_sen[i][:] = temp_sen[i][:-1]
             word_probs[i][:] = word_probs[i][:-1]
     return temp_sen, word_probs
-
 
 def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
     chatbot.train()
@@ -165,22 +164,18 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
                 j = 0
                 for l in lens:
                     if l > 0:
-                        tmp.append((h_ori[j : j + l]).tolist())
+                        tmp.append((h_ori[j:j+l]).tolist())
                         j += l
                 history.append(tmp)
-
+            
             # get chatbot persona
             persona_bot = [[] for _ in range(args.batch_size)]
 
-            bot_reply, bot_probs = generate_response(
-                persona_bot, history, tokenizer, chatbot, args_bot
-            )
+            bot_reply, bot_probs = generate_response(persona_bot, history, tokenizer, chatbot, args_bot)            
             history = [h + [r] for h, r in zip(history, bot_reply)]
 
-            spk2_reply, spk2_probs = generate_response(
-                persona_spk2, history, tokenizer, interlocutor, args_bot
-            )
-
+            spk2_reply, spk2_probs = generate_response(persona_spk2, history, tokenizer, interlocutor, args_bot)            
+            
             q_r = [[his[-1], r] for his, r in zip(history, spk2_reply)]
             score = get_score(q_r, tokenizer)
 
@@ -192,6 +187,8 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
                     print(tokenizer.decode(h))
                 print(tokenizer.decode(spk2_reply[j]))
             exit()
+
+            
 
             # get engagin score
             q_r = [[q, r] for q, r in zip(chatbot_reply, spk2_reply)]

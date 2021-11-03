@@ -200,9 +200,7 @@ def get_data_loaders(args, tokenizer):
 
 def get_data_loaders_persona(args, tokenizer):
     """Prepare the dataset for training and evaluation"""
-    personachat = get_dataset(
-        tokenizer, args.dataset_path, args.dataset_cache + "_persona"
-    )
+    personachat = get_dataset(tokenizer, args.dataset_path, args.dataset_cache + "_persona")
 
     logger.info("Build inputs and labels")
     datasets = {"train": defaultdict(list), "valid": defaultdict(list)}
@@ -226,7 +224,7 @@ def get_data_loaders_persona(args, tokenizer):
                 # remove too long datum
                 persona_list = list(chain(*persona))
                 if len(persona_list) > args.persona_max_length:
-                    continue
+                    continue                
                 history = list(chain(*history))
                 if len(history) > args.history_max_length:
                     continue
@@ -243,16 +241,11 @@ def get_data_loaders_persona(args, tokenizer):
     names = ["persona", "history", "length_persona", "length_history"]
     for dataset_name, dataset in datasets.items():
         # padding input
-        max_length = [
-            args.persona_max_length,
-            args.history_max_length,
-            5,
-            args.history_turn,
-        ]
+        max_length = [args.persona_max_length, args.history_max_length, 5, args.history_turn]
         padding = [pad, pad, 0, 0]
         for name, max_l, p in zip(names, max_length, padding):
             dataset[name] = [x + [p] * (max_l - len(x)) for x in dataset[name]]
-
+        
         for name in names:
             tensor = torch.tensor(dataset[name])
             print(dataset_name, name, tensor.shape)

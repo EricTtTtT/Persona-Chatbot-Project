@@ -5,7 +5,6 @@
 import os
 import random
 import logging
-import re
 import warnings
 import matplotlib.pyplot as plt
 from os.path import join
@@ -18,9 +17,17 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from transformers import GPT2LMHeadModel,GPT2Tokenizer,BertModel,BertTokenizer,BertForSequenceClassification, AutoModel
-    
-
+from transformers import (
+    OpenAIGPTLMHeadModel,
+    OpenAIGPTTokenizer,
+    GPT2LMHeadModel,
+    GPT2Tokenizer,
+    BertModel,
+    BertTokenizer,
+    BertForSequenceClassification,
+    AdamW,
+    get_linear_schedule_with_warmup,
+)
 from torch.nn.utils.rnn import pad_sequence
 
 from train import (
@@ -33,8 +40,7 @@ from train import (
 from Engaging_classifier import analyze_engagement
 from Persona_Selector import prepare_persona_selector, select_persona
 from tensorboardX import SummaryWriter
-from PPO import PPO
-from remove_duplicate_persona import remove_duplicate_persona
+
 # from collections import defaultdict
 # from torch.utils.data import DataLoader, TensorDataset
 # from utils import get_dataset, download_pretrained_model, top_filtering
@@ -43,41 +49,43 @@ writer = SummaryWriter("runs")
 SPECIAL_TOKENS = ["<bos>", "<|eos|>", "<speaker1>", "<speaker2>", "<pad>"]
 
 
-def generate_response(personality, history, tokenizer, model, arg):
+def generate_response(personality, history, tokenizer, model, arg, current_output=None):
     special_tokens_ids = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)
 
     bos, eos, speaker1, speaker2, pad = special_tokens_ids
+    if current_output is None:
+        current_output = [[] for _ in range(arg.train_batch_size)]
 
-    sequence = [
+    sequence_bt = [
         [[bos] + persona_i] + history_i
         for persona_i, history_i in zip(personality, history)
     ]
-    sequence = [
+    sequence_bt = [
         [seq[0]]
         + [
             [speaker2 if (len(seq) - i) % 2 else speaker1] + s
             for i, s in enumerate(seq[1:])
         ]
-        for seq in sequence
+        for seq in sequence_bt
     ]
-    token_type_ids = [
+    token_type_ids_bt = [
         [speaker2 if i % 2 else speaker1 for i, s in enumerate(seq) for _ in s]
-        for seq in sequence
+        for seq in sequence_bt
     ]
-    sequence = [list(chain(*seq)) for seq in sequence]
-    mask_len = [len(x) for x in sequence]
+    sequence_bt = [list(chain(*seq)) for seq in sequence_bt]
+    mask_len = [len(x) for x in sequence_bt]
     mass = []
-    for i in range(len(sequence)):
+    for i in range(len(sequence_bt)):
         m = [1 for j in range(mask_len[i])]
         mass.append(m[:])
 
-    sequence = pad_sequence(
-        [torch.LongTensor(x) for x in sequence],
+    sequence_bt = pad_sequence(
+        [torch.LongTensor(x) for x in sequence_bt],
         batch_first=True,
         padding_value=tokenizer.encode("<pad>")[0],
     ).to(arg.device)
-    token_type_ids = pad_sequence(
-        [torch.LongTensor(x) for x in token_type_ids],
+    token_type_ids_bt = pad_sequence(
+        [torch.LongTensor(x) for x in token_type_ids_bt],
         batch_first=True,
         padding_value=speaker1,
     ).to(arg.device)
@@ -85,7 +93,7 @@ def generate_response(personality, history, tokenizer, model, arg):
         [torch.LongTensor(x) for x in mass], batch_first=True, padding_value=0
     ).to(arg.device)
 
-    _, past = model(sequence, attention_mask=mask, token_type_ids=token_type_ids)
+    _, past = model(sequence_bt, attention_mask=mask, token_type_ids=token_type_ids_bt)
 
     token_tp = torch.LongTensor(
         [[speaker2] if len(x) % 2 else [speaker1] for x in history]
@@ -99,7 +107,10 @@ def generate_response(personality, history, tokenizer, model, arg):
         logits, past = model(prev, token_type_ids=token_tp, past=past)
         logits = logits.squeeze(0).squeeze(1)
         # logits = top_filtering(logits, top_k=arg.top_k, top_p=arg.top_p)
-        probs = torch.softmax(logits, dim=-1)
+        
+        # Apply temperature
+        # probs = torch.softmax(logits, dim=-1)
+        probs = torch.softmax(logits / arg.temperature, dim=-1)
 
         prev = torch.multinomial(probs, num_samples=1)
         # prev = [torch.topk(prob_i, 1)[1] if arg.no_sample else torch.multinomial(prob_i, 1) for prob_i in probs]
@@ -146,7 +157,7 @@ def prepare_chatbot(check_point, bt=8, root="."):
             self.max_length = 40
             self.min_length = 1
             self.seed = 2
-            self.temperature = 1
+            self.temperature = 0.5
             self.top_k = 0
             self.top_p = 0
             self.distributed = False
@@ -166,12 +177,10 @@ def prepare_chatbot(check_point, bt=8, root="."):
     logger.info("Get pretrained model and tokenizer")
     tokenizer_class, model_class = (
         GPT2Tokenizer,
-        GPT2LMHeadModel
+        GPT2LMHeadModel,
     )  # if args.model == 'gpt2' else (OpenAIGPTTokenizer, OpenAIGPTLMHeadModel)
     tokenizer = tokenizer_class.from_pretrained(check_point)
-    # model = model_class.from_pretrained(check_point)
     model = model_class.from_pretrained(check_point)
-    # model = torch.load(check_point)
     interlocutor = model_class.from_pretrained(check_point)
     model.to(arg.device).eval()
     interlocutor.to(arg.device).eval()
@@ -230,27 +239,20 @@ def main():
     del val_loader, train_sampler, valid_sampler
     print("\n\nlen(train_loader): ", len(train_loader), "\n\n")
     bert_tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
-    # bert_model = BertModel.from_pretrained("bert-base-uncased")
-    # persona_pool = remove_duplicate_persona()
-    persona_pool = np.load("./clean_persona.npy")
-    # exit(0)
+    bert_model = BertModel.from_pretrained("bert-base-uncased")
     bert_model = BertForSequenceClassification.from_pretrained(
-        "bert-base-uncased", num_labels=len(persona_pool)
+        "bert-base-uncased", num_labels=6732
     )
     bert_model.train()
-    # persona_selector, persona_pool = prepare_persona_selector(
-        # load_path=args.load_model_path, bert_model = bert_model, lr = args.lr
-    # )
-    print(np.shape(persona_pool))
-    # exit(0)
-    ppo = PPO(persona_pool = persona_pool ,bert_model = bert_model, lr_actor = float(args.lr))
-    # persona_selector.id_selector.train()
-    # persona_selector.train()
-    # optimizer = torch.optim.Adam(persona_selector.parameters(), lr = args.lr)
-    # # optimizer = AdamW(bert_model.parameters(), lr=1e-5, eps=1e-5)
-    # scheduler = get_linear_schedule_with_warmup(
-    #     optimizer, num_warmup_steps=500, num_training_steps=8000
-    # )  # PyTorch scheduler
+
+    persona_selector, persona_pool = prepare_persona_selector(
+        load_path=args.load_model_path
+    )
+    optimizer = torch.optim.Adam(persona_selector.id_selector.parameters(), lr = args.lr)
+    # optimizer = AdamW(bert_model.parameters(), lr=1e-5, eps=1e-5)
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer, num_warmup_steps=500, num_training_steps=8000
+    )  # PyTorch scheduler
 
     selector_history = 5
 
@@ -260,10 +262,15 @@ def main():
         finish preparing  !!!!!!!!!!!!!!!!!
         ######################################################"""
     )
-    
-    for i_epoch in range(1):
+    persona_selector.train()
+    optimizer.zero_grad()
+    for i_epoch in range(args.epoch):
 
-        count = 0
+        i_batch = 0
+        sc = 0
+        prob_record = []
+        score_record = []
+        loss = 0
         for input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids in tqdm(
             train_loader
         ):
@@ -306,6 +313,15 @@ def main():
                         break
                 interlocutor_persona_enc.append(persona)
                 history_enc.append(history)
+            # print(history)
+            # print('######################')
+            # print('persona')
+            # print(tokenizer.decode(interlocutor_persona_enc[0]))
+            # print('######################')
+            # print('history init')
+            # for sen_enc in history_enc[0]:
+            #     print(tokenizer.decode(sen_enc))
+
             # ===== generate s1 from interlocutor ==========
             with torch.no_grad():
                 response_enc = generate_response(
@@ -323,19 +339,14 @@ def main():
             ]
 
             if args.select:
-                # persona_s2, temp_prob, _ , critic_value_0 = select_persona(
-                #     persona_selector, persona_pool, history, bert_tokenizer, bert_model
-                # )
-                # log_prob.extend(temp_prob)
-
-                persona_s2 = ppo.select_action(history, bert_tokenizer)
+                persona_s2, log_prob = select_persona(
+                    persona_selector, persona_pool, history, bert_tokenizer, bert_model
+                )
             else:
-                persona_s2, log_prob, _ , critic_value_0 = random.sample(persona, args.batch_size), [
+                persona_s2, log_prob = random.sample(persona, args.batch_size), [
                     0 for _ in range(args.batch_size)
                 ]
-            # print("Critic value 0 is ", critic_value_0)
-            # print("Critic value 0 looks like ", np.shape(critic_value_0))
-            # prob_record.append(log_prob)
+            prob_record.append(log_prob)
 
             # ===== generate s2 ============================
             persona_enc = [
@@ -356,7 +367,8 @@ def main():
                 )
                 for i in range(args.batch_size):
                     history_enc[i].append(response_enc[i])
-            ppo.buffer.rewards.append(get_score([h[-2:] for h in history_enc], tokenizer))
+
+            score_record.append(get_score([h[-2:] for h in history_enc], tokenizer))
 
             # ===== select persona for s4 ==================
             history = [
@@ -365,24 +377,20 @@ def main():
             ]
             if not args.fix:
                 if args.select:
-                    # persona_s4, temp_prob, _ , critic_value_1 = select_persona(
-                    #     persona_selector,
-                    #     persona_pool,
-                    #     history,
-                    #     bert_tokenizer,
-                    #     bert_model,
-                    # )
-                    # log_prob.extend(temp_prob)
-                    persona_s4 = ppo.select_action(history, bert_tokenizer)
+                    persona_s4, log_prob = select_persona(
+                        persona_selector,
+                        persona_pool,
+                        history,
+                        bert_tokenizer,
+                        bert_model,
+                    )
                 else:
-                    persona_s4, log_prob, _ , critic_value_1 = random.sample(
+                    persona_s4, log_prob = random.sample(
                         persona_pool, args.batch_size
                     ), [0 for _ in range(args.batch_size)]
             else:
                 persona_s4, log_prob = persona_s2, [0 for _ in range(args.batch_size)]
-            # [[v1, v2, ...]]
-            # print("Critic value 1 is ", np.shape(critic_value_1))
-            # prob_record.append(log_prob)
+            prob_record.append(log_prob)
 
             # ===== generate s4 ============================
             persona_enc = [
@@ -404,141 +412,107 @@ def main():
                 for i in range(args.batch_size):
                     history_enc[i].append(response_enc[i])
 
-            # score_record.append(get_score([h[-2:] for h in history_enc], tokenizer))
-            ppo.buffer.rewards.append(get_score([h[-2:] for h in history_enc], tokenizer))
-            # for i in range(len(persona_s2)):
-            #     print("******************************")
-            #     print("history sentences is \t", ppo.buffer.states[0][i])
-            #     print("history sentences is \t", ppo.buffer.states[1][i])
-            #     print("persona_s2 is \t", persona_s2[i])
-            #     print("reward s2 is ", ppo.buffer.rewards[0][i])
-            #     print("persona_s4 is \t", persona_s4[i])
-            #     print("reward s4 is ", ppo.buffer.rewards[1][i])
-            ppo.update()
-            count += 1
-            if count == 1500:
-                ppo.update(done=True)
+            score_record.append(get_score([h[-2:] for h in history_enc], tokenizer))
+
             # print('value_init\n', value_init)
             # print('prob_record\n', prob_record)
             # print('score_record\n', score_record)
 
-            # rewards_s4 = [score_record[1][i] for i in range(args.batch_size)]
-            # rewards_s2 = [score_record[0][i] for i in range(args.batch_size)]
+            rewards_s4 = [score_record[1][i] for i in range(args.batch_size)]
+            rewards_s2 = [score_record[0][i] for i in range(args.batch_size)]
 
-            # rewards_ori = torch.tensor([rewards_s2, rewards_s4], device=arg.device)
-            # # torch.Size([2, 16]) [[r2, r2 ....], [r4, r4 ....]]
-            # # print("reward_ori is ", np.shape(rewards_ori))
-            # rewards = []
+            rewards_ori = torch.tensor([rewards_s2, rewards_s4], device=arg.device)
 
-            # for r in rewards_ori:
-            #     rewards.append((r - r.mean()) / r.std())
-            # rewards = (rewards_ori - rewards_ori.mean()) / (rewards_ori.std() + 1e-9)
-            # print("rewards is ", np.shape(rewards))
-            # print('reward is ', rewards)
-            # print("critic 0 is ", np.shape(critic_value_0))
-            # print("critic 1 is ", np.shape(critic_value_1))
+            # print(rewards_ori)
+            rewards = []
 
-            # critic_value = [critic_value_0, critic_value_1]
-            # print("critic  is ", np.shape(critic_value))
-            # print("log_prob is ", log_prob)
-            # print("log_prob is ", np.shape(log_prob))
+            for r in rewards_ori:
+                rewards.append((r - r.mean())/ (r.std() + 1e-9))
+                # rewards = (rewards_ori - rewards_ori.mean()) / (rewards_ori.std() + 1e-9)
 
-    #         reward is  [tensor([-0.9153,  1.2531, -0.8226,  1.2426,  1.0966, -0.9443,  0.7169,  0.8108,                                                            │·········································
-    #     -0.9564, -0.8737,  1.1903,  1.1924, -0.2371, -0.9503, -0.9472, -0.8557],                                                                       │·········································
-    #    device='cuda:0'), tensor([-0.5524,  2.0472, -0.5509, -0.5056, -0.4680, -0.3796,  1.7195, -0.5507,                                               │·········································
-    #     -0.5527, -0.5483, -0.4664, -0.5019,  0.0245,  2.1970, -0.4153, -0.4964],                                                                       │·········································
-    #    device='cuda:0')]  
-            # exit(0)
             # loss = 0
             # rewards = rewards[:args.batch_size//2]
             # prob_record = prob_record[:args.batch_size//2]
-            # print('rewards\n', rewards)
+            print('rewards : \t', rewards)
+            print("prob_record : \t ", prob_record)
             # rewards = rewards[:1]
             # prob_record = prob_record[:1]
-            # for r, l in zip(rewards, prob_record):
-            #     loss -= sum(r * l) 
-            #     break
+            for r, l in zip(rewards, prob_record):
+                loss -= sum(r * l)
+                # break
+            print("loss : \t", loss)
+            rewards_ori = rewards_ori.detach().cpu().numpy()
+            rw_2, rw_4 = np.sum(rewards_ori, axis=1)
+            sc_2, sc_4 = np.sum(score_record, axis=1)
+            sc_ori = np.sum(value_init)
 
-            # rewards_ori = rewards_ori.detach().cpu().numpy()
-            # rw_2, rw_4 = np.sum(rewards_ori, axis=1)
-            # sc_2, sc_4 = np.sum(score_record, axis=1)
-            # sc_ori = np.sum(value_init)
+            # optimizer.zero_grad()
+            loss /= 2
+            # persona_selector.train()
+            loss.backward()
+            # torch.nn.utils.clip_grad_norm_(bert_model.parameters(), 1.0)
+            # optimizer.step()
+            # scheduler.step()
 
-            # # optimizer.zero_grad()
-            # # loss /= 2
-            # # # persona_selector.train()
-            # # loss.backward()
-            # # torch.nn.utils.clip_grad_norm_(bert_model.parameters(), 1.0)
-            # # optimizer.step()
-            # # scheduler.step()
-            # persona_selector.learn(rewards, critic_value, log_prob)
-            # i_batch += 1
-            # sc += rewards_ori[0].mean()
-            # print("loss", loss.item(), "reward:", rewards_ori.mean())
-            # if i_batch % 2 == 0:
-            #     # torch.nn.utils.clip_grad_norm_(bert_model.parameters(), 1.0)
-            #     persona_selector.optimizer.step()
-            #     scheduler.step()
-            #     persona_selector.optimizer.zero_grad()
-            
-        # import matplotlib.pyplot as plt
-        # plt.plot(persona_selector.critic_loss_record, label = "critic loss")
-        # plt.plot(persona_selector.value_loss_record, label = "value loss")
-        # plt.legend(loc = "best")
-        # plt.savefig("loss.jpg")
-        # exit(0)
-            # if i_batch % args.log_step == 0:
-            #     niter = i_epoch * len(train_loader) + i_batch
-            #     writer.add_scalar("Train/Value_Loss", persona_selector.value_loss, niter)
-            #     writer.add_scalar("Train/Critic_Loss", persona_selector.critic_loss, niter)
-            #     writer.add_scalar("Train/Score_origin", sc_ori, niter)
-            #     writer.add_scalar("Train/Score_s2", sc_2, niter)
-            #     writer.add_scalar("Train/Score_s4", sc_4, niter)
-            #     writer.add_scalar("Train/Reward_s2", rw_2, niter)
-            #     writer.add_scalar("Train/Reward_s4", rw_4, niter)
+            i_batch += 1
+            sc += rewards_ori[0].mean()
+            print("loss", loss.item(), "reward:", rewards_ori.mean())
+            if i_batch % 2 == 0:
+                torch.nn.utils.clip_grad_norm_(bert_model.parameters(), 1.0)
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad()
+            if i_batch % args.log_step == 0:
+                niter = i_epoch * len(train_loader) + i_batch
+                writer.add_scalar("Train/Loss", loss, niter)
+                writer.add_scalar("Train/Score_origin", sc_ori, niter)
+                writer.add_scalar("Train/Score_s2", sc_2, niter)
+                writer.add_scalar("Train/Score_s4", sc_4, niter)
+                writer.add_scalar("Train/Reward_s2", rw_2, niter)
+                writer.add_scalar("Train/Reward_s4", rw_4, niter)
 
-            # if i_batch % args.print_sample_step == 0:
-            #     with open(log_file_path, "a") as fp:
-            #         fp.write("\n===== dialogue sample ======================\n")
-            #         fp.write(
-            #             f"persona_interlocutor :\n{tokenizer.decode(interlocutor_persona_enc[0])}\n"
-            #         )
-            #         fp.write(f"persona_s2: {persona_s2[0]}\n")
-            #         fp.write(f"persona_s4: {persona_s4[0]}\n")
-            #         fp.write(f"\nhistory + s1~s5 at {i_epoch} epoch {i_batch} batch\n")
-            #         for sen_enc in history_enc[0]:
-            #             fp.write(f"{tokenizer.decode(sen_enc)}\n")
-            #     print("===== print dialogue sample ==================")
-            #     print(
-            #         f"\npersona_interlocutor :\n{tokenizer.decode(interlocutor_persona_enc[0])}\n"
-            #     )
-            #     print("\npersona_s2\n", persona_s2[0])
-            #     print("\npersona_s4\n", persona_s4[0])
-            #     print(f"\nhistory + s1~s5 at {i_epoch} epoch {i_batch} batch")
-            #     for sen_enc in history_enc[0]:
-            #         print(tokenizer.decode(sen_enc))
-            #     print(sc / args.print_sample_step)
-            #     sc = 0
+            if i_batch % args.print_sample_step == 0:
+                with open(log_file_path, "a") as fp:
+                    fp.write("\n===== dialogue sample ======================\n")
+                    fp.write(
+                        f"persona_interlocutor :\n{tokenizer.decode(interlocutor_persona_enc[0])}\n"
+                    )
+                    fp.write(f"persona_s2: {persona_s2[0]}\n")
+                    fp.write(f"persona_s4: {persona_s4[0]}\n")
+                    fp.write(f"\nhistory + s1~s5 at {i_epoch} epoch {i_batch} batch\n")
+                    for sen_enc in history_enc[0]:
+                        fp.write(f"{tokenizer.decode(sen_enc)}\n")
+                print("===== print dialogue sample ==================")
+                print(
+                    f"\npersona_interlocutor :\n{tokenizer.decode(interlocutor_persona_enc[0])}\n"
+                )
+                print("\npersona_s2\n", persona_s2[0])
+                print("\npersona_s4\n", persona_s4[0])
+                print(f"\nhistory + s1~s5 at {i_epoch} epoch {i_batch} batch")
+                for sen_enc in history_enc[0]:
+                    print(tokenizer.decode(sen_enc))
+                print(sc / args.print_sample_step)
+                sc = 0
 
-            # if i_batch % args.save_time_step == 0:
-            #     torch.save(
-            #         persona_selector,
-            #         os.path.join(
-            #             args.work_space,
-            #             args.save_dir,
-            #             args.model_name,
-            #             f"{i_epoch}_epoch.pkl",
-            #         ),
-            #     )
+            if i_batch % args.save_time_step == 0:
+                torch.save(
+                    persona_selector,
+                    os.path.join(
+                        args.work_space,
+                        args.save_dir,
+                        args.model_name,
+                        f"{i_epoch}_epoch.pkl",
+                    ),
+                )
 
-        #     prob_record.clear()
-        #     score_record.clear()
-        # torch.save(
-        #     persona_selector,
-        #     os.path.join(
-        #         args.work_space, args.save_dir, args.model_name, f"{i_epoch}_epoch.pkl"
-        #     ),
-        # )
+            prob_record.clear()
+            score_record.clear()
+        torch.save(
+            persona_selector,
+            os.path.join(
+                args.work_space, args.save_dir, args.model_name, f"{i_epoch}_epoch.pkl"
+            ),
+        )
 
 
 if __name__ == "__main__":

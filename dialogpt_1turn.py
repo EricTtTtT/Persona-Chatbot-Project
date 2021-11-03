@@ -32,10 +32,7 @@ import gc
 
 writer = SummaryWriter("runs")
 
-
-def generate_response(
-    input_ids, mask, tokenizer, model, args, model_2=None, device="cuda:0"
-):
+def generate_response(input_ids, mask, tokenizer, model, args, model_2=None, device="cuda:0"):
     """
     Generate response without persona.
     """
@@ -53,9 +50,13 @@ def generate_response(
             input_ids = input_ids.to(args.device)
             mask = mask.to(device)
 
+<<<<<<< HEAD
+        prev = torch.LongTensor([[tokenizer.eos_token_id] for _ in range(bt)]).to(device)
+=======
         prev = torch.LongTensor([[tokenizer.eos_token_id] for _ in range(bt)]).to(
             device
         )
+>>>>>>> 4c9672d0847152fb808b125e45cfde77cd3a863a
         mask_append = torch.tensor([[1] for i in range(bt)]).to(device)
         temp_sen = [[] for _ in range(bt)]
         log_prob = [[] for _ in range(bt)]
@@ -76,10 +77,18 @@ def generate_response(
                 logits_2 = torch.softmax(logits_2.squeeze(0).squeeze(1), dim=-1)
                 mask = mask.to(device)
                 prev = prev.to(device)
+<<<<<<< HEAD
+                
+
+            prev = torch.multinomial(logits, num_samples=1)
+            log_p = [math.log(p[idx]) for idx, p in zip(prev, logits)]
+            
+=======
 
             prev = torch.multinomial(logits, num_samples=1)
             log_p = [math.log(p[idx]) for idx, p in zip(prev, logits)]
 
+>>>>>>> 4c9672d0847152fb808b125e45cfde77cd3a863a
             if model_2:
                 # get average of probs_2
                 probs_2 = []
@@ -90,7 +99,11 @@ def generate_response(
                     avg_prob_2 = 0
                 else:
                     avg_prob_2 = sum(probs_2) / len(probs_2)
+<<<<<<< HEAD
+            
+=======
 
+>>>>>>> 4c9672d0847152fb808b125e45cfde77cd3a863a
             if i_word == 0:
                 for j in range(bt):
                     # print("\n##########")
@@ -98,6 +111,13 @@ def generate_response(
                     temp_sen[j].append(prev[j].item())
                     log_prob[j].append(log_p[j])
                     if model_2:
+<<<<<<< HEAD
+                        tmp_loss = F.cross_entropy(logits[j].unsqueeze(0), prev.view(-1)[j].unsqueeze(0))
+                        coherence_score_arr[j].append(logits_2[j][prev[j].item()].item())
+                        coherence_loss[j] += (logits_2[j][prev[j].item()].item() - avg_prob_2) * tmp_loss
+                continue
+            
+=======
                         tmp_loss = F.cross_entropy(
                             logits[j].unsqueeze(0), prev.view(-1)[j].unsqueeze(0)
                         )
@@ -109,12 +129,18 @@ def generate_response(
                         ) * tmp_loss
                 continue
 
+>>>>>>> 4c9672d0847152fb808b125e45cfde77cd3a863a
             for j in range(bt):
                 if cont[j]:
                     if temp_sen[j][-1] != eos_id:
                         temp_sen[j].append(prev[j].item())
                         log_prob[j].append(log_p[j])
                         if model_2:
+<<<<<<< HEAD
+                            tmp_loss = F.cross_entropy(logits[j].unsqueeze(0), prev.view(-1)[j].unsqueeze(0))
+                            coherence_score_arr[j].append(logits_2[j][prev[j].item()].item())
+                            coherence_loss[j] += (logits_2[j][prev[j].item()].item() - avg_prob_2) * tmp_loss
+=======
                             tmp_loss = F.cross_entropy(
                                 logits[j].unsqueeze(0), prev.view(-1)[j].unsqueeze(0)
                             )
@@ -124,16 +150,25 @@ def generate_response(
                             coherence_loss[j] += (
                                 logits_2[j][prev[j].item()].item() - avg_prob_2
                             ) * tmp_loss
+>>>>>>> 4c9672d0847152fb808b125e45cfde77cd3a863a
                     else:
                         cont[j] = False
             if not (True in cont):
                 break
+<<<<<<< HEAD
+        
+=======
 
+>>>>>>> 4c9672d0847152fb808b125e45cfde77cd3a863a
         for i in range(bt):
             if temp_sen[i][-1] == eos_id:
                 temp_sen[i][:] = temp_sen[i][:-1]
                 log_prob[i][:] = log_prob[i][:-1]
+<<<<<<< HEAD
+        
+=======
 
+>>>>>>> 4c9672d0847152fb808b125e45cfde77cd3a863a
         coherence_score = [0 for _ in range(bt)]
         if model_2:
             for j, scores in enumerate(coherence_score_arr):
@@ -162,6 +197,11 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
 
         for batch in tqdm(train_loader):
             input_ids, mask = batch
+<<<<<<< HEAD
+            chatbot_reply, log_prob, coherence_score, coherence_loss = generate_response(
+                input_ids, mask, tokenizer, chatbot, args_bot,
+                model_2=interlocutor, device=args_bot.device
+=======
             (
                 chatbot_reply,
                 log_prob,
@@ -175,6 +215,7 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
                 args_bot,
                 model_2=interlocutor,
                 device=args_bot.device,
+>>>>>>> 4c9672d0847152fb808b125e45cfde77cd3a863a
             )
 
             # padding reply
@@ -188,6 +229,15 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
                 )
             reply_tensor = torch.tensor(reply_tensor)
             input_ids = torch.cat((input_ids, reply_tensor), 1)
+<<<<<<< HEAD
+            mask_append = [[1] * len(reply) + [0] * (max_l - len(reply)) + [1] for reply in chatbot_reply]
+            mask_append = torch.tensor(mask_append)
+            mask = torch.cat((mask, mask_append), 1)
+
+            spk2_reply, _, coherence_score_spk2, coherence_loss_spk2 = generate_response(
+                input_ids, mask, tokenizer, interlocutor, args_bot,
+                device=args_bot.device_2
+=======
             mask_append = torch.ones((args.batch_size, max_l + 1))  # +1 for eos_token
             mask = torch.cat((mask, mask_append), 1)
 
@@ -203,6 +253,7 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
                 interlocutor,
                 args_bot,
                 device=args_bot.device_2,
+>>>>>>> 4c9672d0847152fb808b125e45cfde77cd3a863a
             )
 
             # get engagin score
@@ -228,6 +279,12 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
                 # loss = torch.tensor(
                 #     running_loss / args.step_optimize, requires_grad=True
                 # )
+<<<<<<< HEAD
+                loss = running_loss.clone().detach().requires_grad_(True) / args.step_optimize
+                loss.backward()
+
+                torch.nn.utils.clip_grad_norm_(chatbot.parameters(), .5)
+=======
                 loss = (
                     running_loss.clone().detach().requires_grad_(True)
                     / args.step_optimize
@@ -235,6 +292,7 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
                 loss.backward()
 
                 torch.nn.utils.clip_grad_norm_(chatbot.parameters(), 0.5)
+>>>>>>> 4c9672d0847152fb808b125e45cfde77cd3a863a
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
@@ -244,9 +302,13 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
                     "Train/Engaging_score", running_score / args.step_optimize, i_iter
                 )
                 writer.add_scalar(
+<<<<<<< HEAD
+                    "Train/Coherence_score", running_coherence / args.step_optimize, i_iter
+=======
                     "Train/Coherence_score",
                     running_coherence / args.step_optimize,
                     i_iter,
+>>>>>>> 4c9672d0847152fb808b125e45cfde77cd3a863a
                 )
                 i_iter += 1
 
@@ -281,7 +343,10 @@ def train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot):
                     chatbot, os.path.join(args.model_folder, f"{i_epoch}epoch.bin")
                 )
 
+<<<<<<< HEAD
+=======
 
+>>>>>>> 4c9672d0847152fb808b125e45cfde77cd3a863a
 def analyze_engaging(chatbot, interlocutor, tokenizer, data_loader, args, args_bot):
     chatbot.eval()
     interlocutor.eval()
@@ -289,13 +354,22 @@ def analyze_engaging(chatbot, interlocutor, tokenizer, data_loader, args, args_b
     i_batch = 0
     num_batch = 30
     repeat_time = 10
+<<<<<<< HEAD
+    engaging_scores = [[0 for _ in range(repeat_time)] for _ in range(args.batch_size*num_batch)]
+=======
     engaging_scores = [
         [0 for _ in range(repeat_time)] for _ in range(args.batch_size * num_batch)
     ]
+>>>>>>> 4c9672d0847152fb808b125e45cfde77cd3a863a
     with torch.no_grad():
         for batch in tqdm(data_loader):
             for i_time in range(repeat_time):
                 input_ids, mask = batch.copy()
+<<<<<<< HEAD
+                chatbot_reply, log_prob, coherence_score, coherence_loss = generate_response(
+                    input_ids, mask, tokenizer, chatbot, args_bot,
+                    model_2=interlocutor, device=args_bot.device
+=======
                 (
                     chatbot_reply,
                     log_prob,
@@ -309,6 +383,7 @@ def analyze_engaging(chatbot, interlocutor, tokenizer, data_loader, args, args_b
                     args_bot,
                     model_2=interlocutor,
                     device=args_bot.device,
+>>>>>>> 4c9672d0847152fb808b125e45cfde77cd3a863a
                 )
 
                 # padding reply
@@ -322,6 +397,14 @@ def analyze_engaging(chatbot, interlocutor, tokenizer, data_loader, args, args_b
                     )
                 reply_tensor = torch.tensor(reply_tensor)
                 input_ids = torch.cat((input_ids, reply_tensor), 1)
+<<<<<<< HEAD
+                mask_append = torch.ones((args.batch_size, max_l + 1))  # +1 for eos_token
+                mask = torch.cat((mask, mask_append), 1)
+
+                spk2_reply, _, coherence_score_spk2, coherence_loss_spk2 = generate_response(
+                    input_ids, mask, tokenizer, interlocutor, args_bot,
+                    device=args_bot.device_2
+=======
                 mask_append = torch.ones(
                     (args.batch_size, max_l + 1)
                 )  # +1 for eos_token
@@ -339,6 +422,7 @@ def analyze_engaging(chatbot, interlocutor, tokenizer, data_loader, args, args_b
                     interlocutor,
                     args_bot,
                     device=args_bot.device_2,
+>>>>>>> 4c9672d0847152fb808b125e45cfde77cd3a863a
                 )
 
                 # get engagin score
@@ -346,6 +430,15 @@ def analyze_engaging(chatbot, interlocutor, tokenizer, data_loader, args, args_b
                 score = get_score(q_r, tokenizer)
                 for j, sc in enumerate(score):
                     engaging_scores[i_batch * args.batch_size + j][i_time] = sc
+<<<<<<< HEAD
+                
+                input_ids_decoded = tokenizer.batch_decode(input_ids)
+                spk2_reply_decoded = tokenizer.batch_decode(spk2_reply)
+
+                with open("analysis/dialogpt_engaging_30bt_10t_sentences.txt", "a") as f:
+                    f.write(f"\{i_batch} batch:\n")
+                    for dialogue, spk2, sc in zip(input_ids_decoded, spk2_reply_decoded, score):
+=======
 
                 input_ids_decoded = tokenizer.batch_decode(input_ids)
                 spk2_reply_decoded = tokenizer.batch_decode(spk2_reply)
@@ -357,6 +450,7 @@ def analyze_engaging(chatbot, interlocutor, tokenizer, data_loader, args, args_b
                     for dialogue, spk2, sc in zip(
                         input_ids_decoded, spk2_reply_decoded, score
                     ):
+>>>>>>> 4c9672d0847152fb808b125e45cfde77cd3a863a
                         write_buffer = f"\n#########################\n score: {sc}\n"
                         write_buffer += (
                             dialogue.replace(tokenizer.eos_token, "\n").replace(
@@ -376,12 +470,19 @@ def analyze_engaging(chatbot, interlocutor, tokenizer, data_loader, args, args_b
         std_tmp = 0
         for sc in scores:
             std_tmp += (sc - avg_score) ** 2
+<<<<<<< HEAD
+        repeat_std_scores.append((std_tmp / repeat_time)**0.5)
+    with open("analysis/dialogpt_engaging_30bt_10t_scores.txt", "w") as f:
+        f.write(f"#### DialoGPT\n30 batch, repeat 10 times\n")
+        f.write(f"\ntotal mean scores: {sum(repeat_avg_scores) / len(repeat_avg_scores)}\n")
+=======
         repeat_std_scores.append((std_tmp / repeat_time) ** 0.5)
     with open("analysis/dialogpt_engaging_30bt_10t_scores.txt", "w") as f:
         f.write(f"#### DialoGPT\n30 batch, repeat 10 times\n")
         f.write(
             f"\ntotal mean scores: {sum(repeat_avg_scores) / len(repeat_avg_scores)}\n"
         )
+>>>>>>> 4c9672d0847152fb808b125e45cfde77cd3a863a
         f.write("\naverage in each repeat\n")
         for avg_sc in repeat_avg_scores:
             f.write(f"{avg_sc}  ")
@@ -394,6 +495,10 @@ def analyze_engaging(chatbot, interlocutor, tokenizer, data_loader, args, args_b
     print(engaging_scores)
     print(repeat_avg_scores)
     print(repeat_std_scores)
+<<<<<<< HEAD
+                
+=======
+>>>>>>> 4c9672d0847152fb808b125e45cfde77cd3a863a
 
 
 class ARG_BOT:
@@ -428,11 +533,19 @@ def main():
     parser.add_argument(
         "--model_checkpoint", type=str, default="model/dialogpt-medium/"
     )
+<<<<<<< HEAD
+    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--epoch", type=int, default=2)
+    parser.add_argument("--lr", type=float, default=1e-5)
+    parser.add_argument("--save_dir", type=str, default="model/")
+    parser.add_argument("--model_name", type=str, default="dialogpt_1turn_lr1-5_w02")
+=======
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--epoch", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1e-6)
     parser.add_argument("--save_dir", type=str, default="model/")
     parser.add_argument("--model_name", type=str, default="dialogpt_1turn_lr1-6_w02")
+>>>>>>> 4c9672d0847152fb808b125e45cfde77cd3a863a
 
     # parameters
     parser.add_argument("--weight_coherence", type=float, default=0.2)
@@ -465,9 +578,15 @@ def main():
     )
     del train_sampler, valid_sampler
 
+<<<<<<< HEAD
+    # analyze_engaging(chatbot, interlocutor, tokenizer, val_loader, args, args_bot)
+
+    train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot)
+=======
     analyze_engaging(chatbot, interlocutor, tokenizer, val_loader, args, args_bot)
 
     # train(chatbot, interlocutor, tokenizer, train_loader, args, args_bot)
+>>>>>>> 4c9672d0847152fb808b125e45cfde77cd3a863a
 
 
 if __name__ == "__main__":
