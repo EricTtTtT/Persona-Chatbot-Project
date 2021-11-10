@@ -12,7 +12,7 @@ from os.path import join
 from itertools import chain
 from argparse import ArgumentParser
 
-from pprint import pformat
+from pprint import pformat, pprint
 from tqdm import tqdm
 import numpy as np
 import torch
@@ -33,11 +33,15 @@ from train import (
 from Engaging_classifier import analyze_engagement
 from Persona_Selector import prepare_persona_selector, select_persona
 from tensorboardX import SummaryWriter
-from PPO import PPO
+from PPO_emo import PPO
 from remove_duplicate_persona import remove_duplicate_persona
 # from collections import defaultdict
 # from torch.utils.data import DataLoader, TensorDataset
 # from utils import get_dataset, download_pretrained_model, top_filtering
+
+from GoEmotions_pytorch.model import EmoBertForMultiLabelClassification
+from GoEmotions_pytorch.multilabel_pipeline import MultiLabelPipeline
+
 
 writer = SummaryWriter("runs")
 SPECIAL_TOKENS = ["<bos>", "<|eos|>", "<speaker1>", "<speaker2>", "<pad>"]
@@ -184,14 +188,15 @@ def prepare_chatbot(check_point, bt=8, root="."):
     return model, interlocutor, tokenizer, arg
 
 
-def get_score(history_enc_last_two, tokenizer):
-    query = []
-    reply = []
-    for history_enc_i in history_enc_last_two:
-        query.append(tokenizer.decode(history_enc_i[0]))
-        reply.append(tokenizer.decode(history_enc_i[1]))
-    score = analyze_engagement(query, reply)
-    return score
+# def get_score(history_enc_last_two, tokenizer):
+#     # query = []
+#     # reply = []
+#     # for history_enc_i in history_enc_last_two:
+#     #     query.append(tokenizer.decode(history_enc_i[0]))
+#     #     reply.append(tokenizer.decode(history_enc_i[1]))
+#     # score = analyze_engagement(query, reply)
+#     score = [len(h[1]) for h in history_enc_last_two]
+#     return score
 
 
 def main():
@@ -199,18 +204,18 @@ def main():
     parser.add_argument("--work_space", type=str, default=".")
     parser.add_argument("--model_checkpoint", type=str, default="model/gpt2_persona_model/")
     parser.add_argument("--save_dir", type=str, default="model/")
-    parser.add_argument("--model_name", type=str, default="l-_turn2_lr5_u5")
+    parser.add_argument("--model_name", type=str, default="exc_joy__turn1__lr5_u2_bt32")
 
     # hyper parameters
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--epoch", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1e-5)
-    parser.add_argument("--turn", type=int, default=2)
+    parser.add_argument("--turn", type=int, default=1)
     
     # steps
     parser.add_argument("--step_sample", type=int, default=200)
     parser.add_argument("--step_save", type=int, default=1000)
-    parser.add_argument("--step_update", type=int, default=5)
+    parser.add_argument("--step_update", type=int, default=2)
 
     args = parser.parse_args()
     args.model_save_folder = os.path.join(args.work_space, args.save_dir, args.model_name)
@@ -236,6 +241,17 @@ def main():
     )
     bert_tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
     bert_model.train()
+
+    # ====== emotion score ==========
+    emo_tokenizer = BertTokenizer.from_pretrained("monologg/bert-base-cased-goemotions-original")
+    emo_model = EmoBertForMultiLabelClassification.from_pretrained("monologg/bert-base-cased-goemotions-original")
+
+    goemotions = MultiLabelPipeline(
+        model=emo_model,
+        tokenizer=emo_tokenizer,
+        threshold=0.3
+    )
+
 
     ppo = PPO(persona_pool = persona_pool ,bert_model = bert_model, lr_actor = float(args.lr))
     # persona_selector.id_selector.train()
@@ -269,7 +285,6 @@ def main():
                 j = 0
                 for l in lens:
                     if l > 0:
-                        # tmp.append((h_ori[j:j+l]).tolist())
                         tmp.append((h_ori[j:j+l]).tolist())
                         j += l
                 history_enc.append(tmp)
@@ -295,10 +310,11 @@ def main():
                         inter_persona_enc, history_enc, tokenizer, interlocutor, arg
                     )
                     history_enc = [h + [r] for h, r in zip(history_enc, response_enc)]
-                ppo.buffer.rewards.append(get_score([h[-2:] for h in history_enc], tokenizer))
+                try_text = [tokenizer.decode(h[-1]) for h in history_enc]
+                ppo.buffer.rewards.append(goemotions.get_score(try_text, scale=100))
 
             if i_batch % args.step_update == 0:
-                ppo.update_writer(writer=writer, i_iter=i_batch, turn=args.turn, update_turn)
+                ppo.update_writer(writer=writer, i_iter=i_batch, turn=args.turn)
 
 
             i_batch += 1
