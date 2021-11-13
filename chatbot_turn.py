@@ -5,21 +5,16 @@
 import os
 import random
 import logging
-import re
 import warnings
-import matplotlib.pyplot as plt
 from os.path import join
 from itertools import chain
 from argparse import ArgumentParser
 
-from pprint import pformat, pprint
 from tqdm import tqdm
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 from transformers import GPT2LMHeadModel,GPT2Tokenizer,BertModel,BertTokenizer,BertForSequenceClassification, AutoModel
-    
 
 from torch.nn.utils.rnn import pad_sequence
 
@@ -32,7 +27,6 @@ from train import (
 
 from Engaging_classifier import analyze_engagement
 from Persona_Selector import prepare_persona_selector, select_persona
-from tensorboardX import SummaryWriter
 from PPO_emo import PPO
 from remove_duplicate_persona import remove_duplicate_persona
 # from collections import defaultdict
@@ -43,7 +37,7 @@ from GoEmotions_pytorch.model import EmoBertForMultiLabelClassification
 from GoEmotions_pytorch.multilabel_pipeline import MultiLabelPipeline
 
 
-writer = SummaryWriter("runs")
+from tensorboardX import SummaryWriter
 SPECIAL_TOKENS = ["<bos>", "<|eos|>", "<speaker1>", "<speaker2>", "<pad>"]
 
 
@@ -262,6 +256,7 @@ def main():
     #     optimizer, num_warmup_steps=500, num_training_steps=8000
     # )  # PyTorch scheduler
 
+    writer = SummaryWriter("runs")
     print(
         """
         ######################################################
