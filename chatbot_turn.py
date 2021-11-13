@@ -182,15 +182,15 @@ def prepare_chatbot(check_point, bt=8, root="."):
     return model, interlocutor, tokenizer, arg
 
 
-# def get_score(history_enc_last_two, tokenizer):
-#     # query = []
-#     # reply = []
-#     # for history_enc_i in history_enc_last_two:
-#     #     query.append(tokenizer.decode(history_enc_i[0]))
-#     #     reply.append(tokenizer.decode(history_enc_i[1]))
-#     # score = analyze_engagement(query, reply)
-#     score = [len(h[1]) for h in history_enc_last_two]
-#     return score
+def get_score(history_enc_last_two, tokenizer):
+    query = []
+    reply = []
+    for history_enc_i in history_enc_last_two:
+        query.append(tokenizer.decode(history_enc_i[0]))
+        reply.append(tokenizer.decode(history_enc_i[1]))
+    score = analyze_engagement(query, reply)
+    score = [len(h[1]) for h in history_enc_last_two]
+    return score
 
 
 def main():
@@ -237,8 +237,10 @@ def main():
     bert_model.train()
 
     # ====== emotion score ==========
-    emo_tokenizer = BertTokenizer.from_pretrained("monologg/bert-base-cased-goemotions-original")
-    emo_model = EmoBertForMultiLabelClassification.from_pretrained("monologg/bert-base-cased-goemotions-original")
+    emo_tokenizer = BertTokenizer.from_pretrained("monologg/bert-base-cased-goemotions-group")
+    emo_model = EmoBertForMultiLabelClassification.from_pretrained("monologg/bert-base-cased-goemotions-group")
+    # emo_tokenizer = BertTokenizer.from_pretrained("monologg/bert-base-cased-goemotions-original")
+    # emo_model = EmoBertForMultiLabelClassification.from_pretrained("monologg/bert-base-cased-goemotions-original")
 
     goemotions = MultiLabelPipeline(
         model=emo_model,
@@ -305,8 +307,10 @@ def main():
                         inter_persona_enc, history_enc, tokenizer, interlocutor, arg
                     )
                     history_enc = [h + [r] for h, r in zip(history_enc, response_enc)]
-                try_text = [tokenizer.decode(h[-1]) for h in history_enc]
-                ppo.buffer.rewards.append(goemotions.get_score(try_text, scale=100))
+                # try_text = [tokenizer.decode(h[-1]) for h in history_enc]
+                ppo.buffer.rewards.append(get_score([h[-2:] for h in history_enc], tokenizer))
+                # ppo.buffer.rewards.append(goemotions.get_score(try_text, type="origin", scale=100))
+                # ppo.buffer.rewards.append(goemotions.get_score(try_text, type="group", scale=100))
 
             if i_batch % args.step_update == 0:
                 ppo.update_writer(writer=writer, i_iter=i_batch, turn=args.turn)
