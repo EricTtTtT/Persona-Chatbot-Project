@@ -19,7 +19,6 @@ import torch
 # import torch.nn.functional as F
 
 from transformers import GPT2LMHeadModel,GPT2Tokenizer,BertModel,BertTokenizer,BertForSequenceClassification, AutoModel
-    
 
 from torch.nn.utils.rnn import pad_sequence
 
@@ -43,7 +42,7 @@ from GoEmotions_pytorch.model import EmoBertForMultiLabelClassification
 from GoEmotions_pytorch.multilabel_pipeline import MultiLabelPipeline
 
 
-writer = SummaryWriter("runs")
+from tensorboardX import SummaryWriter
 SPECIAL_TOKENS = ["<bos>", "<|eos|>", "<speaker1>", "<speaker2>", "<pad>"]
 
 
@@ -189,15 +188,15 @@ def prepare_chatbot(check_point, bt=8, root="."):
     return model, interlocutor, tokenizer, arg
 
 
-# def get_score(history_enc_last_two, tokenizer):
-#     # query = []
-#     # reply = []
-#     # for history_enc_i in history_enc_last_two:
-#     #     query.append(tokenizer.decode(history_enc_i[0]))
-#     #     reply.append(tokenizer.decode(history_enc_i[1]))
-#     # score = analyze_engagement(query, reply)
-#     score = [len(h[1]) for h in history_enc_last_two]
-#     return score
+def get_score(history_enc_last_two, tokenizer):
+    query = []
+    reply = []
+    for history_enc_i in history_enc_last_two:
+        query.append(tokenizer.decode(history_enc_i[0]))
+        reply.append(tokenizer.decode(history_enc_i[1]))
+    score = analyze_engagement(query, reply)
+    score = [len(h[1]) for h in history_enc_last_two]
+    return score
 
 
 def main():

@@ -12,7 +12,7 @@ tar zxvf data.tar.gz
 # then move model and data folder into this repo folder
 ```
 
-## Usage:  
+## Usage:
     python3 Chatbot.py  
 
 ## TODO:  
