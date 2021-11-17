@@ -5,18 +5,18 @@
 import os
 import random
 import logging
-# import re
+import re
 import warnings
-# import matplotlib.pyplot as plt
-# from os.path import join
+import matplotlib.pyplot as plt
+from os.path import join
 from itertools import chain
 from argparse import ArgumentParser
 
-# from pprint import pformat, pprint
+from pprint import pformat, pprint
 from tqdm import tqdm
 import numpy as np
 import torch
-# import torch.nn.functional as F
+import torch.nn.functional as F
 
 from transformers import GPT2LMHeadModel,GPT2Tokenizer,BertModel,BertTokenizer,BertForSequenceClassification, AutoModel
     
@@ -25,16 +25,16 @@ from torch.nn.utils.rnn import pad_sequence
 
 from train import (
     SPECIAL_TOKENS,
-    # build_input_from_segments,
+    build_input_from_segments,
     add_special_tokens_,
     get_data_loaders_persona,
 )
 
-# from Engaging_classifier import analyze_engagement
-# from Persona_Selector import prepare_persona_selector, select_persona
+from Engaging_classifier import analyze_engagement
+from Persona_Selector import prepare_persona_selector, select_persona
 from tensorboardX import SummaryWriter
 from PPO_emo_ac import PPO
-# from remove_duplicate_persona import remove_duplicate_persona
+from remove_duplicate_persona import remove_duplicate_persona
 # from collections import defaultdict
 # from torch.utils.data import DataLoader, TensorDataset
 # from utils import get_dataset, download_pretrained_model, top_filtering
@@ -105,9 +105,8 @@ def generate_response(personality, history, tokenizer, model, arg):
         logits = logits.squeeze(0).squeeze(1)
         # logits = top_filtering(logits, top_k=arg.top_k, top_p=arg.top_p)
         probs = torch.softmax(logits, dim=-1)
-        prev = torch.topk(probs, 1)[1]
 
-        # prev = torch.multinomial(probs, num_samples=1)
+        prev = torch.multinomial(probs, num_samples=1)
         # prev = [torch.topk(prob_i, 1)[1] if arg.no_sample else torch.multinomial(prob_i, 1) for prob_i in probs]
         for prev_i, prob_i in zip(prev, probs):
             if i_word < arg.min_length and prev_i.item() in special_tokens_ids:
@@ -204,18 +203,14 @@ def main():
     parser = ArgumentParser()
     parser.add_argument("--work_space", type=str, default=".")
     parser.add_argument("--model_checkpoint", type=str, default="model/gpt2_persona_model/")
-    parser.add_argument("--save_dir", type=str, default="model/")
-    parser.add_argument("--model_name", type=str, default="positive__t1_c1_e000001__lr5_u2_bt32")
+    parser.add_argument("--save_dir", type=str, default="Emo_saved_model/")
+    parser.add_argument("--model_name", type=str, default="exc_joy__turn1__lr5_u2_bt32")
 
     # hyper parameters
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--epoch", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--turn", type=int, default=1)
-
-    # weights
-    parser.add_argument("--weight_critic", type=float, default=1.0)
-    parser.add_argument("--weight_entropy", type=float, default=0.00001)
     
     # steps
     parser.add_argument("--step_sample", type=int, default=200)
@@ -223,8 +218,8 @@ def main():
     parser.add_argument("--step_update", type=int, default=2)
 
     args = parser.parse_args()
-    args.model_save_folder = os.path.join(args.work_space, args.save_dir, args.model_name)
-    os.makedirs(args.model_save_folder, exist_ok=True)
+    # args.model_save_folder = os.path.join(args.work_space, args.save_dir, args.model_name)
+    # os.makedirs(args.model_save_folder, exist_ok=True)
     args.sample_file = os.path.join(args.work_space, f"sample/{args.model_name}.txt")
 
     # ===== prepare dataset, models and optimizer ==========
@@ -248,10 +243,8 @@ def main():
     bert_model.train()
 
     # ====== emotion score ==========
-    # emo_tokenizer = BertTokenizer.from_pretrained("monologg/bert-base-cased-goemotions-original")
-    # emo_model = EmoBertForMultiLabelClassification.from_pretrained("monologg/bert-base-cased-goemotions-original")
-    emo_tokenizer = BertTokenizer.from_pretrained("monologg/bert-base-cased-goemotions-group")
-    emo_model = EmoBertForMultiLabelClassification.from_pretrained("monologg/bert-base-cased-goemotions-group")
+    emo_tokenizer = BertTokenizer.from_pretrained("monologg/bert-base-cased-goemotions-original")
+    emo_model = EmoBertForMultiLabelClassification.from_pretrained("monologg/bert-base-cased-goemotions-original")
 
     goemotions = MultiLabelPipeline(
         model=emo_model,
@@ -260,7 +253,7 @@ def main():
     )
 
 
-    ppo = PPO(persona_pool = persona_pool ,bert_model = bert_model, lr_actor = float(args.lr), critic_cof=args.weight_critic, entropy_cof=args.weight_entropy)
+    ppo = PPO(persona_pool = persona_pool ,bert_model = bert_model, lr_actor = float(args.lr))
     # persona_selector.id_selector.train()
     # persona_selector.train()
     # optimizer = torch.optim.Adam(persona_selector.parameters(), lr = args.lr)
@@ -269,11 +262,12 @@ def main():
     #     optimizer, num_warmup_steps=500, num_training_steps=8000
     # )  # PyTorch scheduler
 
-    print("""
+    print(
+        """
         ######################################################
         finish preparing  !!!!!!!!!!!!!!!!!
-        ######################################################
-    """)
+        ######################################################"""
+    )
 
     i_batch = 0
     for i_epoch in range(args.epoch):
@@ -317,10 +311,10 @@ def main():
                     )
                     history_enc = [h + [r] for h, r in zip(history_enc, response_enc)]
                 try_text = [tokenizer.decode(h[-1]) for h in history_enc]
-                ppo.buffer.rewards.append(goemotions.get_positive_score(try_text))
+                ppo.buffer.rewards.append(goemotions.get_score(try_text, scale=1))
 
             if i_batch % args.step_update == 0:
-                ppo.update_writer(writer, i_batch, args.turn)
+                ppo.update_writer(writer=writer, i_iter=i_batch, turn=args.turn)
 
 
             i_batch += 1
@@ -339,7 +333,7 @@ def main():
                     f.write(sample_str)
             
             if i_batch % args.step_save == 0:
-                torch.save(ppo.policy, os.path.join(args.model_save_folder, "model.bin"))
+                torch.save(ppo.policy, os.path.join(ppo.output_dir, "model.bin"))
 
     ppo.draw()
 if __name__ == "__main__":
