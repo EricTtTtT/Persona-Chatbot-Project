@@ -32,7 +32,7 @@ from train import (
 # from Engaging_classifier import analyze_engagement
 # from Persona_Selector import prepare_persona_selector, select_persona
 from tensorboardX import SummaryWriter
-from PPO_emo_ac import PPO
+from PPO_emo import PPO
 # from remove_duplicate_persona import remove_duplicate_persona
 # from collections import defaultdict
 # from torch.utils.data import DataLoader, TensorDataset
@@ -209,7 +209,8 @@ def main():
     # hyper parameters
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--epoch", type=int, default=2)
-    parser.add_argument("--lr", type=float, default=1e-5)
+    parser.add_argument("--lr_actor", type=float, default=1e-5)
+    parser.add_argument("--lr_critic", type=float, default=2e-3)
     parser.add_argument("--turn", type=int, default=1)
 
     # weights
@@ -219,7 +220,7 @@ def main():
     # steps
     parser.add_argument("--step_sample", type=int, default=200)
     parser.add_argument("--step_save", type=int, default=1000)
-    parser.add_argument("--step_update", type=int, default=2)
+    parser.add_argument("--step_update", type=int, default=16)
 
     args = parser.parse_args()
     args.model_save_folder = os.path.join(args.work_space, args.save_dir, args.model_name)
