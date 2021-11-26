@@ -1,4 +1,5 @@
 from logging import log
+from typing import OrderedDict
 import torch
 import torch.nn as nn
 from torch.distributions import MultivariateNormal
@@ -51,7 +52,7 @@ class RolloutBuffer:
 
 
 class ActorCritic(nn.Module):
-    def __init__(self, bert_model, persona_pool, state_dim = 1608, action_dim = 6732, action_std_init = 0.6):
+    def __init__(self, bert_model, persona_pool, state_dim = 768, action_dim = 6732, action_std_init = 0.6):
         super(ActorCritic, self).__init__()
 
         
@@ -61,13 +62,7 @@ class ActorCritic(nn.Module):
         self.persona_pool = persona_pool
         
         # critic
-        self.critic = nn.Sequential(
-                        nn.Linear(state_dim, 64),
-                        nn.ReLU(),
-                        nn.Linear(64, 64),
-                        nn.ReLU(),
-                        nn.Linear(64, 1)
-                    )
+        self.critic = nn.Linear(768, 1)
         self.critic.eval()
     def set_action_std(self, new_action_std):
 
@@ -85,33 +80,41 @@ class ActorCritic(nn.Module):
         output = self.actor(**state)
         action_probs = F.softmax(output[0], dim = -1)
         dist = Categorical(action_probs)
-        peronsa_id = dist.sample()
-        action_logprob = dist.log_prob(peronsa_id)
-        action = [self.persona_pool[id] for id in peronsa_id.cpu().detach().numpy()]
+        # print("Dist ", dist.size())
+        # Replace sample with argmax
+        persona_id = dist.sample()
+        # persona_id = torch.argmax(dist)
+        # print("Persona id ", persona_id.size())
         
-        return action, action_logprob, peronsa_id
+        action_logprob = dist.log_prob(persona_id)
+        action = [self.persona_pool[id] for id in persona_id.cpu().detach().numpy()]
+        # exit(0)
+        return action, action_logprob, persona_id
         # return action.detach(), action_logprob.detach()
     
 
     def evaluate(self, action, **state):
 
-        output = self.actor(**state)
-        # print(" output : ", output[0].size())
-        # last_layer_output = torch.mean(output[0], dim = 1)
-        # print("Last layer output : ", last_layer_output.size())
-        # exit(0)
-        action_probs = F.softmax(output[0], dim = -1)
+        # output is torch.Size([32, 768])
+        output = self.actor.bert(**state)
+        
+        # State value  is torch.Size([32, 1])
+        state_values = self.critic(output[1])
+        
+        # Output of classifier  torch.Size([32, 1608])
+        output = self.actor.classifier(output[1])
+        
+        action_probs = F.softmax(output, dim = -1)
         dist = Categorical(action_probs)
         action_logprobs = dist.log_prob(action)
         dist_entropy = dist.entropy()
-        state_values = self.critic(output[0])
         
         return action_logprobs, state_values, dist_entropy
         # return action_logprobs,  dist_entropy
 
 
 class PPO:
-    def __init__(self, persona_pool, bert_model, state_dim = 1608, action_dim = 6732, lr_actor = 0.0002, lr_critic = 0.5,
+    def __init__(self, persona_pool, bert_model, state_dim = 1608, action_dim = 6732, lr_actor = 0.00002, lr_critic = 0.05,
                  gamma = 0.99, K_epochs = 3, eps_clip  = 0.5, action_std_init=0.3, critic_cof=1.0, entropy_cof = 0.001):
         # print("output dir is ", self.output_dir)
         # exit(0)
@@ -124,10 +127,11 @@ class PPO:
         self.buffer = RolloutBuffer()
         print("**********************************************")
         print("lr actor is ", lr_actor)
+        print("lr critic is ", lr_critic)
         print("**********************************************")
         # exit(0)
         self.root_dir = "./Emo_PPO_output"
-        self.output_dir = f"lra_{lr_actor}_lrc_{lr_critic}_gamma_{gamma}_K_{K_epochs}_eps_{eps_clip}_actionstd_{action_std_init}_cri_{self.critic_cof}_entr_{self.entropy_cof}_"
+        self.output_dir = f"loss_accum_lra_{lr_actor}_lrc_{lr_critic}_gamma_{gamma}_K_{K_epochs}_eps_{eps_clip}_actionstd_{action_std_init}_cri_{self.critic_cof}_entr_{self.entropy_cof}_"
         self.output_dir = os.path.join(self.root_dir, self.output_dir)
         self.lr_actor = lr_actor
         self.lr_critic = lr_critic
@@ -135,13 +139,14 @@ class PPO:
         
         self.policy = ActorCritic(bert_model, persona_pool, state_dim, action_dim, action_std_init).to(device)
         self.optimizer = torch.optim.Adam([
-                        {'params': self.policy.actor.parameters(), 'lr': lr_actor},
-                        {'params': self.policy.critic.parameters(), 'lr': lr_critic}
+                        {'params': self.policy.actor.parameters(), 'lr': self.lr_actor},
+                        {'params': self.policy.critic.parameters(), 'lr': self.lr_critic}
                     ])
 
         self.policy_old = ActorCritic(bert_model, persona_pool, state_dim, action_dim, action_std_init).to(device)
         self.policy_old.load_state_dict(self.policy.state_dict())
         
+        self.loss = 0
         self.MseLoss = nn.MSELoss()
 
         self.device = "cuda"
@@ -209,110 +214,12 @@ class PPO:
 
         return self.policy.evaluate(action, **encode_input)
 
-    def update(self, done = False): 
+    def update(self): 
+        self.optimizer.step()
+        self.optimizer.zero_grad()
+        self.loss = 0
 
-        # Monte Carlo estimate of returns
-        if done:
-            import matplotlib.pyplot as plt
-            
-            # plt.plot(self.critic_loss_record, label = "critic loss")
-            plt.plot(self.loss_record, label = "loss")
-            plt.legend(loc = "best")
-            plt.savefig(self.output_dir + "/loss.jpg")
-            plt.clf()
-            plt.plot(self.entropy_record, label = "entropy")
-            plt.legend(loc = "best")
-            plt.savefig(self.output_dir + "/entropy.jpg")
-            plt.clf()
-            plt.plot(self.reward_record, label = f"reward")
-            plt.legend(loc = "best")
-            plt.title(f"mean = {np.mean(self.reward_record)}, std = {np.std(self.reward_record)}")
-            plt.savefig(self.output_dir + "/reward.jpg")
-            plt.clf()
-            print("Average reward is ", np.mean(self.reward_record))
-            print("Std of reward is ", np.std(self.reward_record))
-            exit(0)
-        rewards = []
-        logprobs = []
-        states = []
-        actions = []
-        for i in range(len(self.buffer.rewards[0])):
-            rewards.append(self.buffer.rewards[0][i] + self.gamma * self.buffer.rewards[1][i])
-            rewards.append(self.buffer.rewards[1][i])
-            logprobs.append(self.buffer.logprobs[0][i])
-            logprobs.append(self.buffer.logprobs[1][i])
-            actions.append(self.buffer.actions[0][i])
-            actions.append(self.buffer.actions[1][i])
-            states.append(self.buffer.states[0][i])
-            states.append(self.buffer.states[1][i])
-            # self.reward_record.append(np.mean(self.buffer.rewards[1]))
-        # discounted_reward = 0
-        reward = (np.mean(self.buffer.rewards[0]) + np.mean(self.buffer.rewards[1]))/2
-        self.reward_record.append(reward)
-        # self.reward_record.append()
-        print(np.mean(self.buffer.rewards[0]))
-        print(np.mean(self.buffer.rewards[1]))
-        # for reward, is_terminal in zip(reversed(self.buffer.rewards), reversed(self.buffer.is_terminals)):
-        #     if is_terminal:
-        #         discounted_reward = 0
-        #     discounted_reward = reward + (self.gamma * discounted_reward)
-        #     rewards.insert(0, discounted_reward)
-            
-        # Normalizing the rewards
-        rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
-        rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-7)
-        # rewards = rewards - 0.5 
-
-        # print("Rewards shape : ", rewards.size())
-
-        rewards  = torch.tensor(rewards , requires_grad=True)
-        # states   = torch.tensor(states, requires_grad=True)
-        actions  = torch.tensor(actions).to(self.device)
-        logprobs = torch.tensor(logprobs, requires_grad=True)
-        
-        # Optimize policy for K epochs
-        for _ in range(self.K_epochs):
-            # Evaluating old actions and values
-            # new_logprobs, state_values, dist_entropy = self.evaluate(states, actions)
-            new_logprobs,  dist_entropy = self.evaluate(states, actions)
-
-            # match state_values tensor dimensions with rewards tensor
-            # state_values = torch.squeeze(state_values)
-            
-            # Finding the ratio (pi_theta / pi_theta__old)
-            ratios = torch.exp(new_logprobs - logprobs.to(self.device))
-            
-            # Finding Surrogate Loss
-            # advantages = (rewards - state_values.detach())
-            advantages = rewards
-            surr1 = (ratios * advantages).sum()
-            surr2 = (torch.clamp(ratios, 1-self.eps_clip, 1+self.eps_clip) * advantages).sum()
-
-            # final loss of clipped objective PPO
-            # critic_loss = self.MseLoss(state_values, rewards) 
-            # loss = -torch.min(surr1, surr2) + self.critic_cof*critic_loss - (self.entropy_cof*dist_entropy.sum())
-            loss = -torch.min(surr1, surr2) - (self.entropy_cof * dist_entropy.sum())
-            # self.critic_loss_record.append(critic_loss)
-            self.entropy_record.append(dist_entropy.sum())
-            print("Loss is : ", loss)
-            # print("critic loss : ", critic_loss)
-            print("clamp is ", -torch.min(surr1, surr2))
-            print("entropy is : ",dist_entropy.sum() )
-            # take gradient step
-            self.optimizer.zero_grad()
-            loss.backward()
-            loss = loss.cpu()
-            self.loss_record.append(loss)
-            self.optimizer.step()
-            
-        # Copy new weights into old policy
-        self.policy_old.load_state_dict(self.policy.state_dict())
-
-        # clear buffer
-        self.buffer.clear()
-    
-
-    def update_writer(self, writer, i_iter=0, turn=2):
+    def update_writer(self, writer, i_iter=0, turn=2, step = False, accum_size=5):
         # turn batch datum in self.buffer to an array
         rewards = []
         logprobs = []
@@ -330,10 +237,10 @@ class PPO:
         self.reward_record.append(np.mean(rewards))
         rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
         writer.add_scalar("reward", rewards.mean(), i_iter)
+        mean = rewards.mean()
+        rewards = ((rewards - mean) / (rewards.std() + 1e-7)) + mean
 
-        rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-7)
-
-        rewards  = rewards.clone().detach().requires_grad_(True)
+        # rewards  = rewards.clone().detach()
         # print("reward size : ", rewards.size())
         actions  = torch.tensor(actions).to(self.device)
         # logprobs  = logprobs.clone().detach().requires_grad_(True)
@@ -356,42 +263,49 @@ class PPO:
             # Finding Surrogate Loss
             advantages = (rewards - state_values.detach())
             # advantages = rewards
-            surr1 = (ratios * advantages).sum()
-            surr2 = (torch.clamp(ratios, 1-self.eps_clip, 1+self.eps_clip) * advantages).sum()
+            surr1 = (ratios * advantages).mean()
+            surr2 = (torch.clamp(ratios, 1-self.eps_clip, 1+self.eps_clip) * advantages).mean()
 
             # final loss of clipped objective PPO
-            critic_loss = torch.clamp(self.MseLoss(state_values, rewards), 0, 10)
-            loss = -torch.min(surr1, surr2) + self.critic_cof*critic_loss - (self.entropy_cof*dist_entropy.sum())
+            # critic_loss = torch.clamp(self.MseLoss(state_values, rewards), 0, 10)
+            critic_loss = self.MseLoss(state_values, rewards).mean()
+            
+            # loss = -torch.min(surr1, surr2) + self.critic_cof*critic_loss + (self.entropy_cof*dist_entropy.mean())
+            loss = (-torch.min(surr1, surr2) + self.critic_cof*critic_loss) / accum_size 
             # loss = -torch.min(surr1, surr2) - (self.entropy_cof * dist_entropy.sum())
+            # loss = torch.clamp(loss, -1000, 1000)
             if np.random.rand() < 0.05:
                 print("surr", -torch.min(surr1, surr2))
-                print("Advantage is ", advantages)
-                print("Rewards is ", rewards)
-                print("state value ", state_values)
+                print("Advantage is ", advantages.mean())
+                print("Rewards is ", rewards.mean())
+                print("state value ", state_values.mean())
                 # print("surr2", surr2)
                 # print("advantage : ", advantages)
                 print("critic loss : ", critic_loss)
-                print("dist_entropy.sum()", dist_entropy.sum())
+                print("dist_entropy.sum()", dist_entropy.mean())
                 if surr2 < surr1:
                     print("!!! surr2 clamp !!!")
                 print("loss", loss)
-            
+            loss.backward()
+            if step:
+                self.optimizer.step()
+                self.optimizer.zero_grad()
             # clip_grad_norm_(self.policy.actor.parameters(), 10)
             # clip_grad_norm_(self.policy.critic.parameters(), 10)
             # take gradient step
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
+            
             loss = loss.detach().cpu()
             dist_entropy = dist_entropy.detach().cpu()
             critic_loss = critic_loss.detach().cpu()
             loss_sum += loss
             entropy_sum += dist_entropy.sum()
-            self.critic_loss_record.append(critic_loss)
             critic_loss_sum += critic_loss
         
+        # if loss_sum < 1000 * self.K_epochs:
         self.loss_record.append(loss_sum / self.K_epochs)
+        # if critic_loss_sum < 1000 * self.K_epochs:
         self.critic_loss_record.append(critic_loss_sum / self.K_epochs)
+        # if entropy_sum < 1000 * self.K_epochs:
         self.entropy_record.append(entropy_sum / self.K_epochs)
         writer.add_scalar("entropy", entropy_sum / self.K_epochs, i_iter)
         writer.add_scalar("loss", loss_sum / self.K_epochs, i_iter)
@@ -402,27 +316,33 @@ class PPO:
 
         # clear buffer
         self.buffer.clear()
+        if np.random.rand() < 0.05:
+            self.draw()
     def draw(self):
         
         import matplotlib.pyplot as plt
             
             # plt.plot(self.critic_loss_record, label = "critic loss")
         plt.plot(self.loss_record, label = "loss")
+        plt.title("Actor loss")
         plt.legend(loc = "best")
         plt.savefig(self.output_dir + "/loss.jpg")
         plt.clf()
         
         plt.plot(self.critic_loss_record, label = "loss")
+        plt.title("Critic loss")
         plt.legend(loc = "best")
         plt.savefig(self.output_dir + "/critic_loss.jpg")
         plt.clf()
         
         plt.plot(self.entropy_record, label = "entropy")
+        plt.title("Entropy")
         plt.legend(loc = "best")
         plt.savefig(self.output_dir + "/entropy.jpg")
         plt.clf()
         
         plt.plot(self.reward_record, label = f"reward")
+        # plt.title("Reward")
         plt.legend(loc = "best")
         plt.title(f"mean = {np.mean(self.reward_record)}, std = {np.std(self.reward_record)}")
         plt.savefig(self.output_dir + "/reward.jpg")
