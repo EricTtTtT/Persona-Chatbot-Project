@@ -20,15 +20,18 @@ class RolloutBuffer:
         self.states = []
         self.logprobs = []
         self.rewards = []
-        self.is_terminals = []
 
     def clear(self):
         del self.actions[:]
         del self.states[:]
         del self.logprobs[:]
         del self.rewards[:]
-        del self.is_terminals[:]
 
+    def __sizeof__(self) -> int:
+        return len(self.actions)
+
+    def size(self):
+        return np.shape(self.actions[0])
 
 class ActorCritic(nn.Module):
     def __init__(self, bert_model, persona_pool, state_dim=768, action_dim=6732, action_std_init=0.6):
@@ -179,7 +182,7 @@ class PPO:
 
         return self.policy.evaluate(action, **encode_input)
 
-    def update(self, i_sample, accum_iter=10, turn=2):
+    def update(self, i_sample, accum_iter, i_batch, step_update, turn=2):
         # turn batch datum in self.buffer to an array
         rewards = []
         logprobs = []
@@ -194,7 +197,6 @@ class PPO:
                 states.append(self.buffer.states[j][i])
 
         # Normalizing the rewards
-        self.reward_record.append(np.mean(rewards))
         rewards_ori = torch.tensor(rewards, dtype=torch.float32).to(self.device)
         rewards_mean = rewards_ori.mean()
         rewards = ((rewards_ori - rewards_mean) / (rewards_ori.std() + 1e-7)) + rewards_mean
@@ -229,7 +231,7 @@ class PPO:
             loss = loss / accum_iter
             loss.backward()
 
-            if (i_sample + 1) == accum_iter:
+            if (i_sample + 1) == accum_iter and (i_batch + 1) == step_update:
                 self.optimizer.step()
                 self.optimizer.zero_grad()
 
@@ -243,44 +245,45 @@ class PPO:
         # clear buffer
         self.buffer.clear()
 
+        del rewards, logprobs, states, actions
         return {
             "loss": loss_sum / self.K_epochs,
             "entropy": entropy_sum / self.K_epochs,
             "critic_loss": critic_loss_sum / self.K_epochs,
         }
 
-    def draw(self):
+    # def draw(self):
 
-        import matplotlib.pyplot as plt
+    #     import matplotlib.pyplot as plt
 
-        # plt.plot(self.critic_loss_record, label = "critic loss")
-        plt.plot(self.loss_record, label="loss")
-        plt.title("Actor loss")
-        plt.legend(loc="best")
-        plt.savefig(self.output_dir + "/loss.jpg")
-        plt.clf()
+    #     # plt.plot(self.critic_loss_record, label = "critic loss")
+    #     plt.plot(self.loss_record, label="loss")
+    #     plt.title("Actor loss")
+    #     plt.legend(loc="best")
+    #     plt.savefig(self.output_dir + "/loss.jpg")
+    #     plt.clf()
 
-        plt.plot(self.critic_loss_record, label="loss")
-        plt.title("Critic loss")
-        plt.legend(loc="best")
-        plt.savefig(self.output_dir + "/critic_loss.jpg")
-        plt.clf()
+    #     plt.plot(self.critic_loss_record, label="loss")
+    #     plt.title("Critic loss")
+    #     plt.legend(loc="best")
+    #     plt.savefig(self.output_dir + "/critic_loss.jpg")
+    #     plt.clf()
 
-        plt.plot(self.entropy_record, label="entropy")
-        plt.title("Entropy")
-        plt.legend(loc="best")
-        plt.savefig(self.output_dir + "/entropy.jpg")
-        plt.clf()
+    #     plt.plot(self.entropy_record, label="entropy")
+    #     plt.title("Entropy")
+    #     plt.legend(loc="best")
+    #     plt.savefig(self.output_dir + "/entropy.jpg")
+    #     plt.clf()
 
-        plt.plot(self.reward_record, label=f"reward")
-        # plt.title("Reward")
-        plt.legend(loc="best")
-        plt.title(f"mean = {np.mean(self.reward_record)}, std = {np.std(self.reward_record)}")
-        plt.savefig(self.output_dir + "/reward.jpg")
-        plt.clf()
-        print("Average reward is ", np.mean(self.reward_record))
-        print("Std of reward is ", np.std(self.reward_record))
-        self.buffer.clear()
+    #     plt.plot(self.reward_record, label=f"reward")
+    #     # plt.title("Reward")
+    #     plt.legend(loc="best")
+    #     plt.title(f"mean = {np.mean(self.reward_record)}, std = {np.std(self.reward_record)}")
+    #     plt.savefig(self.output_dir + "/reward.jpg")
+    #     plt.clf()
+    #     print("Average reward is ", np.mean(self.reward_record))
+    #     print("Std of reward is ", np.std(self.reward_record))
+    #     self.buffer.clear()
 
     def save(self, checkpoint_path):
         torch.save(self.policy_old.state_dict(), checkpoint_path)

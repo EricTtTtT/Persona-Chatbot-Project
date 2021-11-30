@@ -215,6 +215,17 @@ def main():
     )
 
     wandb.init(project="persona_chatbot", name=args.model_name)
+    wandb.config.batch_size = args.batch_size
+    wandb.config.epoch = args.epoch
+    wandb.config.lr_actor = args.lr_actor
+    wandb.config.lr_critic = args.lr_critic
+    wandb.config.turn = args.turn
+    wandb.config.sample_iter = args.sample_iter
+    wandb.config.K_epochs = args.K_epochs
+    wandb.config.weight_critic = args.weight_critic
+    wandb.config.weight_entropy = args.weight_entropy
+
+    
 
     print(
         """
@@ -244,7 +255,9 @@ def main():
 
             persona_bot_record = []
 
-            for i_sample in range(args.sample_turn):
+            for i_sample in range(args.sample_iter):
+                print("i_sample", i_sample)
+                os.system("nvidia-smi")
                 for i_turn in range(args.turn):
                     # get chatbot persona
                     history = [[tokenizer.decode(s) for s in h] for h in history_enc]
@@ -264,17 +277,18 @@ def main():
                     try_text = [tokenizer.decode(h[-1]) for h in history_enc]
                     ppo.buffer.rewards.append(goemotions.get_positive_score(try_text))
 
-                record = ppo.update(i_sample, args.turn)
+                record = ppo.update(i_sample, args.sample_iter, i_batch, args.step_update, args.turn)
 
-            wandb.log(
-                {
-                    "loss": record.loss,
-                    "reward": record.reward,
-                    "loss_actor": record.loss_actor,
-                    "loss_critic": record.loss_critic,
-                },
-                step=i_batch,
-            )
+            if i_batch % args.step_save == 0:
+                wandb.log(
+                    {
+                        "loss": record.loss,
+                        "reward": record.reward,
+                        "loss_actor": record.loss_actor,
+                        "loss_critic": record.loss_critic,
+                    },
+                    step=i_batch,
+                )
             i_batch += 1
 
             if i_batch % args.step_sample == 0:
@@ -294,6 +308,7 @@ def main():
             if i_batch % args.step_save == 0:
                 torch.save(ppo.policy, os.path.join(args.model_save_folder, "model.bin"))
 
+    wandb.save(os.path.join(args.model_save_folder, "model.bin"))
 
 if __name__ == "__main__":
     main()
