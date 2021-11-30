@@ -155,13 +155,13 @@ def main():
     parser.add_argument("--root", type=str, default=".")
     parser.add_argument("--gpt2_persona_checkpoint", type=str, default="model/gpt2_persona_model/")
     parser.add_argument("--save_dir", type=str, default="model/")
-    parser.add_argument("--model_name", type=str, default="positive__t1_c1_e000001__lr5_u2_bt32")
+    parser.add_argument("--model_name", type=str, default="positive")
 
     # hyper parameters
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--epoch", type=int, default=2)
     parser.add_argument("--lr_actor", type=float, default=1e-5)
-    parser.add_argument("--lr_critic", type=float, default=2e-3)
+    parser.add_argument("--lr_critic", type=float, default=1e-4)
     parser.add_argument("--turn", type=int, default=1)
     parser.add_argument("--sample_iter", type=int, default=16)
 
@@ -213,16 +213,19 @@ def main():
         entropy_cof=args.weight_entropy,
     )
 
-    wandb.init(project="persona_chatbot", name=args.model_name)
-    wandb.config.batch_size = args.batch_size
-    wandb.config.epoch = args.epoch
-    wandb.config.lr_actor = args.lr_actor
-    wandb.config.lr_critic = args.lr_critic
-    wandb.config.turn = args.turn
-    wandb.config.sample_iter = args.sample_iter
-    wandb.config.K_epochs = args.K_epochs
-    wandb.config.weight_critic = args.weight_critic
-    wandb.config.weight_entropy = args.weight_entropy
+    wandb.init(project="persona_chatbot", entity="erictien")
+
+    wandb.config = {
+        "batch_size": args.batch_size,
+        "epoch": args.epoch,
+        "lr_actor": args.lr_actor,
+        "lr_critic": args.lr_critic,
+        "turn": args.turn,
+        "sample_iter": args.sample_iter,
+        "K_epochs": args.K_epochs,
+        "weight_critic": args.weight_critic,
+        "weight_entropy": args.weight_entropy,
+    }
 
     
 
