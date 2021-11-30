@@ -163,8 +163,7 @@ def main():
     parser.add_argument("--lr_actor", type=float, default=1e-5)
     parser.add_argument("--lr_critic", type=float, default=2e-3)
     parser.add_argument("--turn", type=int, default=1)
-    parser.add_argument("--update_batch", type=int, default=10)  # TOASK: need this?
-    parser.add_argument("--sample_iter", type=int, default=10)
+    parser.add_argument("--sample_iter", type=int, default=16)
 
     # ppo
     parser.add_argument("--K_epochs", type=int, default=3)
@@ -174,7 +173,7 @@ def main():
     # steps
     parser.add_argument("--step_sample", type=int, default=200)
     parser.add_argument("--step_save", type=int, default=1000)
-    parser.add_argument("--step_update", type=int, default=16)
+    parser.add_argument("--step_update", type=int, default=8)
 
     args = parser.parse_args()
     args.model_save_folder = os.path.join(args.root, args.save_dir, args.model_name)
@@ -237,13 +236,17 @@ def main():
 
     i_batch = 0
     for i_epoch in range(args.epoch):
+        loss_sum = 0
+        loss_critic_sum = 0
+        reward_sum = 0
+        entropy_sum = 0
         for inter_persona_ori, history_ori, len_p, len_h in tqdm(train_loader):
             # recover inter_persona and history from padded datum
             inter_persona_enc = []
             for p_ori, lens in zip(inter_persona_ori, len_p):
                 l = sum(lens)
                 inter_persona_enc.append(p_ori[:l].tolist())
-            history_enc = []
+            history_enc_ori = []
             for h_ori, lens in zip(history_ori, len_h):
                 tmp = []
                 j = 0
@@ -251,13 +254,12 @@ def main():
                     if l > 0:
                         tmp.append((h_ori[j : j + l]).tolist())
                         j += l
-                history_enc.append(tmp)
+                history_enc_ori.append(tmp)
 
-            persona_bot_record = []
 
             for i_sample in range(args.sample_iter):
-                print("i_sample", i_sample)
-                os.system("nvidia-smi")
+                persona_bot_record = []
+                history_enc = history_enc_ori.copy()
                 for i_turn in range(args.turn):
                     # get chatbot persona
                     history = [[tokenizer.decode(s) for s in h] for h in history_enc]
@@ -274,22 +276,30 @@ def main():
                         # interlocutor
                         response_enc = generate_response(inter_persona_enc, history_enc, tokenizer, interlocutor, arg)
                         history_enc = [h + [r] for h, r in zip(history_enc, response_enc)]
-                    try_text = [tokenizer.decode(h[-1]) for h in history_enc]
-                    ppo.buffer.rewards.append(goemotions.get_positive_score(try_text))
+                    score_text = [tokenizer.decode(h[-1]) for h in history_enc]
+                    ppo.buffer.rewards.append(goemotions.get_positive_score(score_text))
 
                 record = ppo.update(i_sample, args.sample_iter, i_batch, args.step_update, args.turn)
+                loss_sum += record["loss"]
+                loss_critic_sum += record["loss_critic"]
+                reward_sum += record["reward"]
+                entropy_sum += record["entropy"]
 
-            if i_batch % args.step_save == 0:
+            i_batch += 1
+            if i_batch % args.step_update == 0:
                 wandb.log(
                     {
-                        "loss": record.loss,
-                        "reward": record.reward,
-                        "loss_actor": record.loss_actor,
-                        "loss_critic": record.loss_critic,
+                        "loss": loss_sum / args.step_update / args.sample_iter,
+                        "loss_critic": loss_critic_sum / args.step_update / args.sample_iter,
+                        "reward": reward_sum / args.step_update / args.sample_iter,
+                        "entropy": entropy_sum / args.step_update / args.sample_iter,
                     },
                     step=i_batch,
                 )
-            i_batch += 1
+                loss_sum = 0
+                loss_critic_sum = 0
+                reward_sum = 0
+                entropy_sum = 0
 
             if i_batch % args.step_sample == 0:
                 for j in range(args.batch_size):

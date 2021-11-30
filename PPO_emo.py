@@ -208,7 +208,7 @@ class PPO:
         # Optimize policy for K epochs
         loss_sum = 0
         entropy_sum = 0
-        critic_loss_sum = 0
+        loss_critic_sum = 0
         for _ in range(self.K_epochs):
             # Evaluating old actions and values
             new_logprobs, state_values, dist_entropy = self.evaluate(states, actions)
@@ -223,10 +223,10 @@ class PPO:
             surr2 = (torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages).mean()
 
             # final loss of clipped objective PPO
-            critic_loss = self.MseLoss(state_values, rewards).mean()
+            loss_critic = self.MseLoss(state_values, rewards).mean()
 
-            # loss = -torch.min(surr1, surr2) + self.critic_cof*critic_loss + (self.entropy_cof*dist_entropy.mean())
-            loss = -torch.min(surr1, surr2) + self.critic_cof * critic_loss
+            # loss = -torch.min(surr1, surr2) + self.critic_cof*loss_critic + (self.entropy_cof*dist_entropy.mean())
+            loss = -torch.min(surr1, surr2) + self.critic_cof * loss_critic
 
             loss = loss / accum_iter
             loss.backward()
@@ -237,7 +237,7 @@ class PPO:
 
             loss_sum += loss.detach().cpu()
             entropy_sum += dist_entropy.detach().cpu()
-            critic_loss_sum += critic_loss.detach().cpu()
+            loss_critic_sum += loss_critic.detach().cpu()
 
         # Copy new weights into old policy
         self.policy_old.load_state_dict(self.policy.state_dict())
@@ -248,8 +248,9 @@ class PPO:
         del rewards, logprobs, states, actions
         return {
             "loss": loss_sum / self.K_epochs,
+            "loss_critic": loss_critic_sum / self.K_epochs,
+            "reward": rewards_mean,
             "entropy": entropy_sum / self.K_epochs,
-            "critic_loss": critic_loss_sum / self.K_epochs,
         }
 
     # def draw(self):
