@@ -163,17 +163,17 @@ def main():
     parser.add_argument("--lr_actor", type=float, default=1e-5)
     parser.add_argument("--lr_critic", type=float, default=1e-4)
     parser.add_argument("--turn", type=int, default=1)
-    parser.add_argument("--sample_iter", type=int, default=16)
+    parser.add_argument("--sample_iter", type=int, default=8)
 
     # ppo
     parser.add_argument("--K_epochs", type=int, default=3)
-    parser.add_argument("--weight_critic", type=float, default=1.0)
+    parser.add_argument("--weight_critic", type=float, default=0.2)
     parser.add_argument("--weight_entropy", type=float, default=0.00001)
 
     # steps
     parser.add_argument("--step_sample", type=int, default=200)
     parser.add_argument("--step_save", type=int, default=1000)
-    parser.add_argument("--step_update", type=int, default=8)
+    parser.add_argument("--step_update", type=int, default=1)
 
     args = parser.parse_args()
     args.model_save_folder = os.path.join(args.root, args.save_dir, args.model_name)
@@ -213,7 +213,8 @@ def main():
         entropy_cof=args.weight_entropy,
     )
 
-    wandb.init(project="persona_chatbot", entity="erictien")
+    # wandb.init(project="persona_chatbot", entity="erictien")
+    wandb.init(project="test-project", entity="persona_chatbot_ntuee")
 
     wandb.config = {
         "batch_size": args.batch_size,
@@ -259,43 +260,52 @@ def main():
                         j += l
                 history_enc_ori.append(tmp)
 
+            ppo.buffer.clear()
+            
+            # TODO: for K_epoch
+            for i_k in range(args.K_epochs):
+                for i_sample in range(args.sample_iter):
+                    persona_bot_record = []
+                    history_enc = history_enc_ori.copy()
 
-            for i_sample in range(args.sample_iter):
-                persona_bot_record = []
-                history_enc = history_enc_ori.copy()
-                for i_turn in range(args.turn):
-                    # get chatbot persona
-                    history = [[tokenizer.decode(s) for s in h] for h in history_enc]
-                    persona_bot = ppo.select_action(history, bert_tokenizer)
-                    persona_bot_enc = [tokenizer.encode(p) for p in persona_bot]
-                    persona_bot_record.append(persona_bot)
+                    for i_turn in range(args.turn):
+                        # get chatbot persona
+                        history = [[tokenizer.decode(s) for s in h] for h in history_enc]
+                        ppo.buffer.states.extend(history.copy())
+                        persona_bot = ppo.select_action(history, bert_tokenizer)
+                        persona_bot_enc = [tokenizer.encode(p) for p in persona_bot]
+                        persona_bot_record.append(persona_bot)
 
-                    # generate one turn response
-                    with torch.no_grad():
-                        # chatbot
-                        response_enc = generate_response(persona_bot_enc, history_enc, tokenizer, model, arg)
-                        history_enc = [h + [r] for h, r in zip(history_enc, response_enc)]
+                        # generate one turn response
+                        with torch.no_grad():
+                            # chatbots
+                            response_enc = generate_response(persona_bot_enc, history_enc, tokenizer, model, arg)
+                            history_enc = [h + [r] for h, r in zip(history_enc, response_enc)]
 
-                        # interlocutor
-                        response_enc = generate_response(inter_persona_enc, history_enc, tokenizer, interlocutor, arg)
-                        history_enc = [h + [r] for h, r in zip(history_enc, response_enc)]
-                    score_text = [tokenizer.decode(h[-1]) for h in history_enc]
-                    ppo.buffer.rewards.append(goemotions.get_positive_score(score_text))
+                            # interlocutor
+                            response_enc = generate_response(inter_persona_enc, history_enc, tokenizer, interlocutor, arg)
+                            history_enc = [h + [r] for h, r in zip(history_enc, response_enc)]
+                        score_text = [tokenizer.decode(h[-1]) for h in history_enc]
+                        ppo.buffer.rewards.extend(goemotions.get_positive_score(score_text))
 
-                record = ppo.update(i_sample, args.sample_iter, i_batch, args.step_update, args.turn)
+                    ppo.calculate()
+        
+                record = ppo.step()
                 loss_sum += record["loss"]
                 loss_critic_sum += record["loss_critic"]
                 reward_sum += record["reward"]
                 entropy_sum += record["entropy"]
+                
+            ppo.update()
 
             i_batch += 1
             if i_batch % args.step_update == 0:
                 wandb.log(
                     {
-                        "loss": loss_sum / args.step_update / args.sample_iter,
-                        "loss_critic": loss_critic_sum / args.step_update / args.sample_iter,
-                        "reward": reward_sum / args.step_update / args.sample_iter,
-                        "entropy": entropy_sum / args.step_update / args.sample_iter,
+                        "loss": loss_sum / args.step_update / args.K_epochs,
+                        "loss_critic": loss_critic_sum / args.step_update / args.K_epochs,
+                        "reward": reward_sum / args.step_update / args.K_epochs,
+                        "entropy": entropy_sum / args.step_update / args.K_epochs
                     },
                     step=i_batch,
                 )
@@ -304,6 +314,7 @@ def main():
                 reward_sum = 0
                 entropy_sum = 0
 
+            # TODO: different sample
             if i_batch % args.step_sample == 0:
                 for j in range(args.batch_size):
                     sample_str = "\n#########################\n"

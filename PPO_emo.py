@@ -17,15 +17,27 @@ else:
 class RolloutBuffer:
     def __init__(self):
         self.actions = []
+        # share the same states for different samples
         self.states = []
         self.logprobs = []
         self.rewards = []
+        
+        self.loss_sum = 0
+        self.loss_critic_sum = 0
+        self.rewards_sum = 0
+        self.entropy_sum = 0
 
     def clear(self):
         del self.actions[:]
         del self.states[:]
         del self.logprobs[:]
         del self.rewards[:]
+
+    def sum_clear(self):
+        self.loss_sum = 0
+        self.loss_critic_sum = 0
+        self.rewards_sum = 0
+        self.entropy_sum = 0
 
     def __sizeof__(self) -> int:
         return len(self.actions)
@@ -162,9 +174,9 @@ class PPO:
         action, action_logprob, persona_id = self.policy_old.act(**encode_input)
 
         # All of them are one batch [a1, a2, ..., a16], [logp1, logp2, ...., logp16]
-        self.buffer.states.append(history_sentences)
-        self.buffer.actions.append(persona_id)
-        self.buffer.logprobs.append(action_logprob)
+        # self.buffer.states.append(history_sentences)
+        self.buffer.actions.extend(persona_id)
+        self.buffer.logprobs.extend(action_logprob)
 
         return action
 
@@ -182,76 +194,58 @@ class PPO:
 
         return self.policy.evaluate(action, **encode_input)
 
-    def update(self, i_sample, accum_iter, i_batch, step_update, turn=2):
-        # turn batch datum in self.buffer to an array
-        rewards = []
-        logprobs = []
-        states = []
-        actions = []
-        for i in range(len(self.buffer.rewards[0])):
-            for j in range(turn):
-                # not reduce previous rewards
-                rewards.append(self.buffer.rewards[j][i])
-                logprobs.append(self.buffer.logprobs[j][i])
-                actions.append(self.buffer.actions[j][i])
-                states.append(self.buffer.states[j][i])
-
+    def calculate(self):
         # Normalizing the rewards
-        rewards_ori = torch.tensor(rewards, dtype=torch.float32).to(self.device)
+        rewards_ori = torch.tensor(self.buffer.rewards, dtype=torch.float32).to(self.device)
         rewards_mean = rewards_ori.mean()
         rewards = ((rewards_ori - rewards_mean) / (rewards_ori.std() + 1e-7)) + rewards_mean
 
-        actions = torch.tensor(actions).to(self.device)
-        # logprobs  = logprobs.clone().detach().requires_grad_(True)
-        logprobs = torch.tensor(logprobs, requires_grad=True)
+        actions = torch.tensor(self.buffer.actions).to(self.device)
+        logprobs = torch.tensor(self.buffer.logprobs, requires_grad=True)
 
-        # Optimize policy for K epochs
-        loss_sum = 0
-        entropy_sum = 0
-        loss_critic_sum = 0
-        for _ in range(self.K_epochs):
-            # Evaluating old actions and values
-            new_logprobs, state_values, dist_entropy = self.evaluate(states, actions)
-            state_values = torch.squeeze(state_values)
+        # Evaluating old actions and values
+        new_logprobs, state_values, dist_entropy = self.evaluate(self.buffer.states, actions)
+        state_values = torch.squeeze(state_values)
 
-            # Finding the ratio (pi_theta / pi_theta__old)
-            ratios = torch.exp(new_logprobs - logprobs.to(self.device))
+        # Finding the ratio (pi_theta / pi_theta__old)
+        ratios = torch.exp(new_logprobs - logprobs.to(self.device))
 
-            # Finding Surrogate Loss
-            advantages = rewards - state_values.detach()
-            surr1 = (ratios * advantages).mean()
-            surr2 = (torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages).mean()
+        # Finding Surrogate Loss
+        advantages = rewards - state_values.detach()
+        surr1 = (ratios * advantages).mean()
+        surr2 = (torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages).mean()
 
-            # final loss of clipped objective PPO
-            loss_critic = self.MseLoss(state_values, rewards).mean()
+        # final loss of clipped objective PPO
+        loss_critic = self.MseLoss(state_values, rewards).mean()
+        # loss = -torch.min(surr1, surr2) + self.critic_cof*loss_critic + (self.entropy_cof*dist_entropy.mean())
+        loss = -torch.min(surr1, surr2) + self.critic_cof * loss_critic
+        loss.backward()
 
-            # loss = -torch.min(surr1, surr2) + self.critic_cof*loss_critic + (self.entropy_cof*dist_entropy.mean())
-            loss = -torch.min(surr1, surr2) + self.critic_cof * loss_critic
 
-            loss = loss / accum_iter
-            loss.backward()
+        self.buffer.loss_sum += loss.detach().cpu()
+        self.buffer.loss_critic_sum += loss_critic.detach().cpu()
+        self.buffer.rewards_sum += rewards_mean.detach().cpu()
+        self.buffer.entropy_sum += dist_entropy.detach().cpu()
 
-            if (i_sample + 1) == accum_iter and (i_batch + 1) == step_update:
-                self.optimizer.step()
-                self.optimizer.zero_grad()
-
-            loss_sum += loss.detach().cpu()
-            entropy_sum += dist_entropy.detach().cpu()
-            loss_critic_sum += loss_critic.detach().cpu()
-
-        # Copy new weights into old policy
-        self.policy_old.load_state_dict(self.policy.state_dict())
-
-        # clear buffer
         self.buffer.clear()
 
-        del rewards, logprobs, states, actions
-        return {
-            "loss": loss_sum / self.K_epochs,
-            "loss_critic": loss_critic_sum / self.K_epochs,
-            "reward": rewards_mean,
-            "entropy": entropy_sum / self.K_epochs,
+    
+    def step(self, sample_iter):
+        self.optimizer.step()
+        self.optimizer.zero_grad()
+
+        ret = {
+            "loss": self.buffer.loss_sum / sample_iter,
+            "loss_critic": self.buffer.loss_critic_sum / sample_iter,
+            "rewards": self.buffer.rewards_sum / sample_iter,
+            "entropy": self.buffer.entropy_sum / sample_iter
         }
+        self.buffer.sum_clear()
+        return ret
+
+    def update(self):
+        self.policy_old.load_state_dict(self.policy.state_dict())
+
 
     # def draw(self):
 
