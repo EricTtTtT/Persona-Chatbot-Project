@@ -163,7 +163,7 @@ def main():
     parser.add_argument("--lr_actor", type=float, default=1e-5)
     parser.add_argument("--lr_critic", type=float, default=1e-4)
     parser.add_argument("--turn", type=int, default=1)
-    parser.add_argument("--sample_iter", type=int, default=8)
+    parser.add_argument("--sample_iter", type=int, default=10)
 
     # ppo
     parser.add_argument("--K_epochs", type=int, default=3)
@@ -223,6 +223,7 @@ def main():
         "lr_critic": args.lr_critic,
         "turn": args.turn,
         "sample_iter": args.sample_iter,
+        "step_update": args.step_update,
         "K_epochs": args.K_epochs,
         "weight_critic": args.weight_critic,
         "weight_entropy": args.weight_entropy,
@@ -260,8 +261,6 @@ def main():
                         j += l
                 history_enc_ori.append(tmp)
 
-            ppo.buffer.clear()
-            
             # TODO: for K_epoch
             for i_k in range(args.K_epochs):
                 for i_sample in range(args.sample_iter):
@@ -290,7 +289,7 @@ def main():
 
                     ppo.calculate()
         
-                record = ppo.step()
+                record = ppo.step(sample_iter=args.sample_iter)
                 loss_sum += record["loss"]
                 loss_critic_sum += record["loss_critic"]
                 reward_sum += record["reward"]
@@ -298,21 +297,21 @@ def main():
                 
             ppo.update()
 
+            # if (i_batch+1) % args.step_update == 0:
+            wandb.log(
+                {
+                    "loss": loss_sum / args.step_update / args.K_epochs,
+                    "loss_critic": loss_critic_sum / args.step_update / args.K_epochs,
+                    "reward": reward_sum / args.step_update / args.K_epochs,
+                    "entropy": entropy_sum / args.step_update / args.K_epochs
+                },
+                step=i_batch,
+            )
             i_batch += 1
-            if i_batch % args.step_update == 0:
-                wandb.log(
-                    {
-                        "loss": loss_sum / args.step_update / args.K_epochs,
-                        "loss_critic": loss_critic_sum / args.step_update / args.K_epochs,
-                        "reward": reward_sum / args.step_update / args.K_epochs,
-                        "entropy": entropy_sum / args.step_update / args.K_epochs
-                    },
-                    step=i_batch,
-                )
-                loss_sum = 0
-                loss_critic_sum = 0
-                reward_sum = 0
-                entropy_sum = 0
+            loss_sum = 0
+            loss_critic_sum = 0
+            reward_sum = 0
+            entropy_sum = 0
 
             # TODO: different sample
             if i_batch % args.step_sample == 0:

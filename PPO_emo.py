@@ -1,3 +1,4 @@
+from numpy.core.fromnumeric import mean
 import torch
 import torch.nn as nn
 from torch.distributions import Categorical
@@ -225,7 +226,7 @@ class PPO:
         self.buffer.loss_sum += loss.detach().cpu()
         self.buffer.loss_critic_sum += loss_critic.detach().cpu()
         self.buffer.rewards_sum += rewards_mean.detach().cpu()
-        self.buffer.entropy_sum += dist_entropy.detach().cpu()
+        self.buffer.entropy_sum += dist_entropy.detach().cpu().mean()
 
         self.buffer.clear()
 
@@ -237,7 +238,7 @@ class PPO:
         ret = {
             "loss": self.buffer.loss_sum / sample_iter,
             "loss_critic": self.buffer.loss_critic_sum / sample_iter,
-            "rewards": self.buffer.rewards_sum / sample_iter,
+            "reward": self.buffer.rewards_sum / sample_iter,
             "entropy": self.buffer.entropy_sum / sample_iter
         }
         self.buffer.sum_clear()
