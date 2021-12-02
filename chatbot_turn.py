@@ -161,17 +161,17 @@ def main():
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--epoch", type=int, default=2)
     parser.add_argument("--lr_actor", type=float, default=1e-5)
-    parser.add_argument("--lr_critic", type=float, default=1e-4)
+    parser.add_argument("--lr_critic", type=float, default=1e-3)
     parser.add_argument("--turn", type=int, default=1)
-    parser.add_argument("--sample_iter", type=int, default=10)
+    parser.add_argument("--sample_iter", type=int, default=16)
 
     # ppo
     parser.add_argument("--K_epochs", type=int, default=3)
     parser.add_argument("--weight_critic", type=float, default=0.2)
-    parser.add_argument("--weight_entropy", type=float, default=0.00001)
+    parser.add_argument("--weight_entropy", type=float, default=1e-3)
 
     # steps
-    parser.add_argument("--step_sample", type=int, default=200)
+    parser.add_argument("--step_sample", type=int, default=50)
     parser.add_argument("--step_save", type=int, default=1000)
     parser.add_argument("--step_update", type=int, default=1)
 
@@ -214,7 +214,7 @@ def main():
     )
 
     # wandb.init(project="persona_chatbot", entity="erictien")
-    wandb.init(project="test-project", entity="persona_chatbot_ntuee")
+    wandb.init(project="positive-chatbot", entity="persona_chatbot_ntuee")
 
     wandb.config = {
         "batch_size": args.batch_size,

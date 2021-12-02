@@ -218,8 +218,8 @@ class PPO:
 
         # final loss of clipped objective PPO
         loss_critic = self.MseLoss(state_values, rewards).mean()
-        # loss = -torch.min(surr1, surr2) + self.critic_cof*loss_critic + (self.entropy_cof*dist_entropy.mean())
-        loss = -torch.min(surr1, surr2) + self.critic_cof * loss_critic
+        loss = -torch.min(surr1, surr2) + self.critic_cof*loss_critic + (self.entropy_cof*dist_entropy.mean())
+        # loss = -torch.min(surr1, surr2) + self.critic_cof * loss_critic
         loss.backward()
 
 
