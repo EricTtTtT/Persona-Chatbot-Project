@@ -20,8 +20,9 @@ import wandb
 
 from PPO_emo import PPO
 
-from GoEmotions_pytorch.model import EmoBertForMultiLabelClassification
-from GoEmotions_pytorch.multilabel_pipeline import MultiLabelPipeline
+from Engaging_classifier import analyze_engagement
+# from GoEmotions_pytorch.model import EmoBertForMultiLabelClassification
+# from GoEmotions_pytorch.multilabel_pipeline import MultiLabelPipeline
 
 SPECIAL_TOKENS = ["<bos>", "<|eos|>", "<speaker1>", "<speaker2>", "<pad>"]
 
@@ -139,15 +140,14 @@ def prepare_chatbot(check_point, bt=8):
     return model, interlocutor, tokenizer, arg
 
 
-# def get_score(history_enc_last_two, tokenizer):
-#     query = []
-#     reply = []
-#     for history_enc_i in history_enc_last_two:
-#         query.append(tokenizer.decode(history_enc_i[0]))
-#         reply.append(tokenizer.decode(history_enc_i[1]))
-#     score = analyze_engagement(query, reply)
-#     score = [len(h[1]) for h in history_enc_last_two]
-#     return score
+def get_score(history_enc_last_two, tokenizer):
+    query = []
+    reply = []
+    for history_enc_i in history_enc_last_two:
+        query.append(tokenizer.decode(history_enc_i[0]))
+        reply.append(tokenizer.decode(history_enc_i[1]))
+    score = analyze_engagement(query, reply)
+    return score
 
 
 def main():
@@ -155,20 +155,20 @@ def main():
     parser.add_argument("--root", type=str, default=".")
     parser.add_argument("--gpt2_persona_checkpoint", type=str, default="model/gpt2_persona_model/")
     parser.add_argument("--save_dir", type=str, default="model/")
-    parser.add_argument("--model_name", type=str, default="positive")
+    parser.add_argument("--model_name", type=str, default="engaging")
 
     # hyper parameters
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--epoch", type=int, default=2)
-    parser.add_argument("--lr_actor", type=float, default=1e-5)
-    parser.add_argument("--lr_critic", type=float, default=1e-3)
+    parser.add_argument("--lr_actor", type=float, default=2e-5)
+    parser.add_argument("--lr_critic", type=float, default=2e-4)
     parser.add_argument("--turn", type=int, default=1)
     parser.add_argument("--sample_iter", type=int, default=16)
 
     # ppo
     parser.add_argument("--K_epochs", type=int, default=3)
     parser.add_argument("--weight_critic", type=float, default=0.2)
-    parser.add_argument("--weight_entropy", type=float, default=1e-3)
+    parser.add_argument("--weight_entropy", type=float, default=2e-5)
 
     # steps
     parser.add_argument("--step_sample", type=int, default=50)
@@ -198,10 +198,10 @@ def main():
     # ====== emotion score ==========
     # emo_tokenizer = BertTokenizer.from_pretrained("monologg/bert-base-cased-goemotions-original")
     # emo_model = EmoBertForMultiLabelClassification.from_pretrained("monologg/bert-base-cased-goemotions-original")
-    emo_tokenizer = BertTokenizer.from_pretrained("monologg/bert-base-cased-goemotions-group")
-    emo_model = EmoBertForMultiLabelClassification.from_pretrained("monologg/bert-base-cased-goemotions-group")
+    # emo_tokenizer = BertTokenizer.from_pretrained("monologg/bert-base-cased-goemotions-group")
+    # emo_model = EmoBertForMultiLabelClassification.from_pretrained("monologg/bert-base-cased-goemotions-group")
 
-    goemotions = MultiLabelPipeline(model=emo_model, tokenizer=emo_tokenizer, threshold=0.3)
+    # goemotions = MultiLabelPipeline(model=emo_model, tokenizer=emo_tokenizer, threshold=0.3)
 
     ppo = PPO(
         persona_pool=persona_pool,
@@ -214,7 +214,7 @@ def main():
     )
 
     # wandb.init(project="persona_chatbot", entity="erictien")
-    wandb.init(project="positive-chatbot", entity="persona_chatbot_ntuee")
+    wandb.init(project="engaging-chatbot", entity="persona_chatbot_ntuee")
 
     wandb.config = {
         "batch_size": args.batch_size,
@@ -229,7 +229,6 @@ def main():
         "weight_entropy": args.weight_entropy,
     }
 
-    
 
     print(
         """
@@ -284,11 +283,13 @@ def main():
                             # interlocutor
                             response_enc = generate_response(inter_persona_enc, history_enc, tokenizer, interlocutor, arg)
                             history_enc = [h + [r] for h, r in zip(history_enc, response_enc)]
-                        score_text = [tokenizer.decode(h[-1]) for h in history_enc]
-                        ppo.buffer.rewards.extend(goemotions.get_positive_score(score_text))
+                        # score_text = [tokenizer.decode(h[-1]) for h in history_enc]
+                        # ppo.buffer.rewards.extend(goemotions.get_positive_score(score_text))
+                        score = get_score([h[-2:] for h in history_enc], tokenizer)
+                        ppo.buffer.rewards.extend(score)
 
                     ppo.calculate()
-        
+
                 record = ppo.step(sample_iter=args.sample_iter)
                 loss_sum += record["loss"]
                 loss_critic_sum += record["loss_critic"]
