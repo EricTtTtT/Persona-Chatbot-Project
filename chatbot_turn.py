@@ -160,15 +160,16 @@ def main():
     # hyper parameters
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--epoch", type=int, default=2)
-    parser.add_argument("--lr_actor", type=float, default=2e-5)
-    parser.add_argument("--lr_critic", type=float, default=2e-4)
+    parser.add_argument("--lr_actor", type=float, default=1e-5)
+    parser.add_argument("--lr_critic", type=float, default=2e-3)
     parser.add_argument("--turn", type=int, default=1)
     parser.add_argument("--sample_iter", type=int, default=16)
 
     # ppo
     parser.add_argument("--K_epochs", type=int, default=3)
     parser.add_argument("--weight_critic", type=float, default=0.2)
-    parser.add_argument("--weight_entropy", type=float, default=2e-5)
+    parser.add_argument("--weight_entropy", type=float, default=0.02)
+    parser.add_argument("--threshold_entropy", type=float, default=5.0)
 
     # steps
     parser.add_argument("--step_sample", type=int, default=50)
@@ -211,23 +212,26 @@ def main():
         K_epochs=args.K_epochs,
         critic_cof=args.weight_critic,
         entropy_cof=args.weight_entropy,
+        threshold_entropy=args.threshold_entropy,
     )
 
     # wandb.init(project="persona_chatbot", entity="erictien")
-    wandb.init(project="engaging-chatbot", entity="persona_chatbot_ntuee")
-
-    wandb.config = {
-        "batch_size": args.batch_size,
-        "epoch": args.epoch,
-        "lr_actor": args.lr_actor,
-        "lr_critic": args.lr_critic,
-        "turn": args.turn,
-        "sample_iter": args.sample_iter,
-        "step_update": args.step_update,
-        "K_epochs": args.K_epochs,
-        "weight_critic": args.weight_critic,
-        "weight_entropy": args.weight_entropy,
-    }
+    wandb.init(
+        project="engaging-chatbot",
+        entity="persona_chatbot_ntuee",
+        config = {
+            "batch_size": args.batch_size,
+            "epoch": args.epoch,
+            "lr_actor": args.lr_actor,
+            "lr_critic": args.lr_critic,
+            "turn": args.turn,
+            "sample_iter": args.sample_iter,
+            "step_update": args.step_update,
+            "K_epochs": args.K_epochs,
+            "weight_critic": args.weight_critic,
+            "weight_entropy": args.weight_entropy,
+        }
+    )
 
 
     print(
@@ -316,8 +320,9 @@ def main():
 
             # TODO: different sample
             if i_batch % args.step_sample == 0:
+                sample_str = "\n#########################\n"
                 for j in range(args.batch_size):
-                    sample_str = "\n#########################\n"
+                    sample_str += "\n#########################\n"
                     sample_str += "interlocutor persona:  " + tokenizer.decode(inter_persona_enc[j]) + "\n"
                     for k in range(args.turn):
                         sample_str += f"chatbot persona {k}:  {persona_bot_record[k][j]} \n"

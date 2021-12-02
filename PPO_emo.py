@@ -115,6 +115,7 @@ class PPO:
         action_std_init=0.3,
         critic_cof=1.0,
         entropy_cof=0.001,
+        threshold_entropy=5.0
     ):
         self.gamma = gamma
         self.eps_clip = eps_clip
@@ -122,6 +123,7 @@ class PPO:
         self.tokenizer = None
         self.critic_cof = critic_cof
         self.entropy_cof = entropy_cof
+        self.threshold_entropy = threshold_entropy
         self.buffer = RolloutBuffer()
         print("**********************************************")
         print("lr actor is ", lr_actor)
@@ -218,7 +220,11 @@ class PPO:
 
         # final loss of clipped objective PPO
         loss_critic = self.MseLoss(state_values, rewards).mean()
-        loss = -torch.min(surr1, surr2) + self.critic_cof*loss_critic + (self.entropy_cof*dist_entropy.mean())
+        entropy_mean = dist_entropy.mean()
+        if entropy_mean > self.threshold_entropy:
+            loss = -torch.min(surr1, surr2) + self.critic_cof*loss_critic
+        else:
+            loss = -torch.min(surr1, surr2) + self.critic_cof*loss_critic + (self.entropy_cof*entropy_mean)
         # loss = -torch.min(surr1, surr2) + self.critic_cof * loss_critic
         loss.backward()
 
@@ -226,7 +232,7 @@ class PPO:
         self.buffer.loss_sum += loss.detach().cpu()
         self.buffer.loss_critic_sum += loss_critic.detach().cpu()
         self.buffer.rewards_sum += rewards_mean.detach().cpu()
-        self.buffer.entropy_sum += dist_entropy.detach().cpu().mean()
+        self.buffer.entropy_sum += entropy_mean.detach().cpu()
 
         self.buffer.clear()
 
