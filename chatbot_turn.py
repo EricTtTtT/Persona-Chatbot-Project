@@ -163,6 +163,7 @@ def validation(data_loader, model, interlocutor, tokenizer, bert_tokenizer, ppo,
     reward_turn_sum = [0 for i in range(args.turn)]
     count = 0
     with torch.no_grad():
+        sample_flag = False
         for inter_persona_ori, history_ori, len_p, len_h in tqdm(data_loader):
             # recover inter_persona and history from padded datum
             inter_persona_enc = []
@@ -200,6 +201,21 @@ def validation(data_loader, model, interlocutor, tokenizer, bert_tokenizer, ppo,
                     history_enc = [h + [r] for h, r in zip(history_enc, response_enc)]
                 score = get_score([h[-2:] for h in history_enc], tokenizer)
                 score_record.append(sum(score) / len(score))
+            
+            if  not sample_flag:
+                sample_str = "\nvalid sample dialog:\n#########################\n"
+                for j in range(args.batch_size):
+                    sample_str += "\n#########################\n"
+                    sample_str += "interlocutor persona:  " + tokenizer.decode(inter_persona_enc[j]) + "\n"
+                    for k in range(args.turn):
+                        sample_str += f"chatbot persona {k}:  {persona_bot_record[k][j]} \n"
+                    for h in history_enc[j]:
+                        sample_str += tokenizer.decode(h) + "\n"
+                    sample_str += "\n"
+                print(sample_str)
+                with open(args.sample_file, "a") as f:
+                    f.write(sample_str)
+                sample_flag = True
 
             for i_turn in range(args.turn):
                 reward_turn_sum[i_turn] += score_record[i_turn]
@@ -336,7 +352,6 @@ def main():
                         j += l
                 history_enc_ori.append(tmp)
 
-            # TODO: for K_epoch
             for i_k in range(args.K_epochs):
                 for i_sample in range(args.sample_iter):
                     persona_bot_record = []
@@ -391,6 +406,8 @@ def main():
 
             # TODO: different sample
             if i_batch % args.step_sample == 0:
+                print(f"epoch: {i_epoch}, batch: {i_batch}")
+                print("train sample dialog:")
                 sample_str = "\n#########################\n"
                 for j in range(args.batch_size):
                     sample_str += "\n#########################\n"
