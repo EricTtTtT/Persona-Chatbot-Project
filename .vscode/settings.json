@@ -1,11 +1,18 @@
 {
     "python.formatting.provider": "black",
     "cSpell.words": [
+        "accum",
         "dialo",
         "dtype",
+        "goemotions",
         "gpt",
+        "logp",
+        "logprobs",
+        "monologg",
         "multinomial",
         "probs",
+        "surr",
+        "TOASK",
         "topk",
         "unsqueeze"
     ]

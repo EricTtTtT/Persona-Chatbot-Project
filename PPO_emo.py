@@ -197,7 +197,7 @@ class PPO:
 
         return self.policy.evaluate(action, **encode_input)
 
-    def calculate(self):
+    def calculate(self, use_threshold=False):
         # Normalizing the rewards
         rewards_ori = torch.tensor(self.buffer.rewards, dtype=torch.float32).to(self.device)
         rewards_mean = rewards_ori.mean()
@@ -221,10 +221,10 @@ class PPO:
         # final loss of clipped objective PPO
         loss_critic = self.MseLoss(state_values, rewards).mean()
         entropy_mean = dist_entropy.mean()
-        if entropy_mean > self.threshold_entropy:
+        if use_threshold and entropy_mean > self.threshold_entropy:
             loss = -torch.min(surr1, surr2) + self.critic_cof*loss_critic
         else:
-            loss = -torch.min(surr1, surr2) + self.critic_cof*loss_critic + (self.entropy_cof*entropy_mean)
+            loss = -torch.min(surr1, surr2) + self.critic_cof*loss_critic - (self.entropy_cof*entropy_mean)
         # loss = -torch.min(surr1, surr2) + self.critic_cof * loss_critic
         loss.backward()
 

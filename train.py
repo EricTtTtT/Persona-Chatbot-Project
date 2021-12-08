@@ -270,6 +270,7 @@ def get_data_loaders_persona(args, tokenizer):
         sampler=train_sampler,
         batch_size=args.train_batch_size,
         shuffle=(not args.distributed),
+        worker_init_fn=args.seed
     )
     valid_loader = DataLoader(
         valid_dataset,

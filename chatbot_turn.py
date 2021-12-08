@@ -94,7 +94,7 @@ def generate_response(personality, history, tokenizer, model, arg):
     return temp_sen
 
 
-def prepare_chatbot(check_point, bt=8):
+def prepare_chatbot(check_point, bt=8, seed=2021):
     class ARG:
         def __init__(self):
             self.dataset_path = "data/personachat_self_original.json"
@@ -106,7 +106,7 @@ def prepare_chatbot(check_point, bt=8):
             self.no_sample = False
             self.max_length = 40
             self.min_length = 1
-            self.seed = 2
+            self.seed = seed
             self.temperature = 1
             self.top_k = 0
             self.top_p = 0
@@ -150,6 +150,63 @@ def get_score(history_enc_last_two, tokenizer):
     return score
 
 
+def validation(data_loader, model, interlocutor, tokenizer, bert_tokenizer, ppo, arg, args):
+    print("Validation")
+    reward_turn_sum = [0 for i in range(args.turn)]
+    count = 0
+    with torch.no_grad():
+        for inter_persona_ori, history_ori, len_p, len_h in tqdm(data_loader):
+            # recover inter_persona and history from padded datum
+            inter_persona_enc = []
+            for p_ori, lens in zip(inter_persona_ori, len_p):
+                l = sum(lens)
+                inter_persona_enc.append(p_ori[:l].tolist())
+            history_enc = []
+            for h_ori, lens in zip(history_ori, len_h):
+                tmp = []
+                j = 0
+                for l in lens:
+                    if l > 0:
+                        tmp.append((h_ori[j : j + l]).tolist())
+                        j += l
+                history_enc.append(tmp)
+
+            score_record = []
+            persona_bot_record = []
+            for i_turn in range(args.turn):
+                # get chatbot persona
+                history = [[tokenizer.decode(s) for s in h] for h in history_enc]
+                ppo.buffer.states.extend(history.copy())
+                persona_bot = ppo.select_action(history, bert_tokenizer)
+                persona_bot_enc = [tokenizer.encode(p) for p in persona_bot]
+                persona_bot_record.append(persona_bot)
+
+                # generate one turn response
+                with torch.no_grad():
+                    # chatbots
+                    response_enc = generate_response(persona_bot_enc, history_enc, tokenizer, model, arg)
+                    history_enc = [h + [r] for h, r in zip(history_enc, response_enc)]
+
+                    # interlocutor
+                    response_enc = generate_response(inter_persona_enc, history_enc, tokenizer, interlocutor, arg)
+                    history_enc = [h + [r] for h, r in zip(history_enc, response_enc)]
+                score = get_score([h[-2:] for h in history_enc], tokenizer)
+                score_record.append(sum(score) / len(score))
+
+            for i_turn in range(args.turn):
+                reward_turn_sum[i_turn] += score_record[i_turn]
+            count += 1
+        ppo.buffer.clear()
+        ppo.buffer.sum_clear()
+    
+    for i_turn in range(args.turn):
+        reward_turn_sum[i_turn] /= count
+    
+    # [reward_mean_turn_0, reward_mean_turn_1, ...]
+    return reward_turn_sum
+
+
+
 def main():
     parser = ArgumentParser()
     parser.add_argument("--root", type=str, default=".")
@@ -160,21 +217,23 @@ def main():
     # hyper parameters
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--epoch", type=int, default=2)
-    parser.add_argument("--lr_actor", type=float, default=1e-5)
-    parser.add_argument("--lr_critic", type=float, default=2e-3)
+    parser.add_argument("--lr_actor", type=float, default=2e-5)
+    parser.add_argument("--lr_critic", type=float, default=1e-3)
     parser.add_argument("--turn", type=int, default=1)
-    parser.add_argument("--sample_iter", type=int, default=16)
+    parser.add_argument("--sample_iter", type=int, default=20)
 
     # ppo
     parser.add_argument("--K_epochs", type=int, default=3)
     parser.add_argument("--weight_critic", type=float, default=0.2)
     parser.add_argument("--weight_entropy", type=float, default=0.02)
-    parser.add_argument("--threshold_entropy", type=float, default=5.0)
+    parser.add_argument("--use_threshold_entropy", type=bool, default=False)
+    parser.add_argument("--threshold_entropy", type=float, default=100.0)
 
     # steps
     parser.add_argument("--step_sample", type=int, default=50)
     parser.add_argument("--step_save", type=int, default=1000)
     parser.add_argument("--step_update", type=int, default=1)
+    parser.add_argument("--step_valid", type=int, default=100)
 
     args = parser.parse_args()
     args.model_save_folder = os.path.join(args.root, args.save_dir, args.model_name)
@@ -186,7 +245,7 @@ def main():
         os.path.join(args.root, args.gpt2_persona_checkpoint), bt=args.batch_size
     )
     train_loader, val_loader, train_sampler, valid_sampler = get_data_loaders_persona(arg, tokenizer)
-    del val_loader, train_sampler, valid_sampler
+    del train_sampler, valid_sampler
 
     # persona_pool = remove_duplicate_persona()
     persona_pool = np.load("./clean_persona.npy")
@@ -230,6 +289,7 @@ def main():
             "K_epochs": args.K_epochs,
             "weight_critic": args.weight_critic,
             "weight_entropy": args.weight_entropy,
+            "use_threshold_entropy": args.use_threshold_entropy,
         }
     )
 
@@ -292,7 +352,7 @@ def main():
                         score = get_score([h[-2:] for h in history_enc], tokenizer)
                         ppo.buffer.rewards.extend(score)
 
-                    ppo.calculate()
+                    ppo.calculate(use_threshold=args.use_threshold_entropy)
 
                 record = ppo.step(sample_iter=args.sample_iter)
                 loss_sum += record["loss"]
@@ -312,7 +372,6 @@ def main():
                 },
                 step=i_batch,
             )
-            i_batch += 1
             loss_sum = 0
             loss_critic_sum = 0
             reward_sum = 0
@@ -334,8 +393,17 @@ def main():
                     f.write(f"\n\n\n{i_epoch} epoch, {i_batch} batch:\n")
                     f.write(sample_str)
 
+            if i_batch % args.step_valid == 0:
+                turn_rewards = validation(val_loader, model, interlocutor, tokenizer, bert_tokenizer, ppo, arg, args)
+                turn_rewards_record = {}
+                for i_turn in range(args.turn):
+                    turn_rewards_record[f"reward_turn_{i_turn}"] = turn_rewards[i_turn]
+                wandb.log(turn_rewards_record, step=i_batch)
             if i_batch % args.step_save == 0:
                 torch.save(ppo.policy, os.path.join(args.model_save_folder, "model.bin"))
+
+            i_batch += 1
+
 
     wandb.save(os.path.join(args.model_save_folder, "model.bin"))
 
