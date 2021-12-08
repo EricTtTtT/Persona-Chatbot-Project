@@ -11,6 +11,7 @@ from argparse import ArgumentParser
 from tqdm import tqdm
 import numpy as np
 import torch
+import tensorflow as tf
 
 from transformers import GPT2LMHeadModel, GPT2Tokenizer, BertTokenizer, BertForSequenceClassification
 from torch.nn.utils.rnn import pad_sequence
@@ -21,6 +22,7 @@ import wandb
 from PPO_emo import PPO
 
 from Engaging_classifier import analyze_engagement
+
 # from GoEmotions_pytorch.model import EmoBertForMultiLabelClassification
 # from GoEmotions_pytorch.multilabel_pipeline import MultiLabelPipeline
 
@@ -29,38 +31,43 @@ SPECIAL_TOKENS = ["<bos>", "<|eos|>", "<speaker1>", "<speaker2>", "<pad>"]
 
 def generate_response(personality, history, tokenizer, model, arg):
     special_tokens_ids = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)
-
     bos, eos, speaker1, speaker2, pad = special_tokens_ids
 
     sequence = [[[bos] + persona_i] + history_i for persona_i, history_i in zip(personality, history)]
     sequence = [
-        [seq[0]] + [[speaker2 if (len(seq) - i) % 2 else speaker1] + s for i, s in enumerate(seq[1:])]
-        for seq in sequence
+        [seq[0]] + [[speaker2 if (len(seq) - i) % 2 else speaker1] + s for i, s in enumerate(seq[1:])] for seq in sequence
     ]
+
     token_type_ids = [[speaker2 if i % 2 else speaker1 for i, s in enumerate(seq) for _ in s] for seq in sequence]
     sequence = [list(chain(*seq)) for seq in sequence]
-    mask_len = [len(x) for x in sequence]
-    mass = []
-    for i in range(len(sequence)):
-        m = [1 for j in range(mask_len[i])]
-        mass.append(m[:])
 
-    sequence = pad_sequence(
-        [torch.LongTensor(x) for x in sequence], batch_first=True, padding_value=tokenizer.encode("<pad>")[0]
+    mask = [[1] * len(seq) for seq in sequence]
+    sequence = torch.LongTensor(
+        tf.keras.preprocessing.sequence.pad_sequences([torch.LongTensor(s) for s in sequence], value=tokenizer.encode("<pad>")[0])
     ).to(arg.device)
-    token_type_ids = pad_sequence(
-        [torch.LongTensor(x) for x in token_type_ids], batch_first=True, padding_value=speaker1
+    token_type_ids = torch.LongTensor(
+        tf.keras.preprocessing.sequence.pad_sequences([torch.LongTensor(s) for s in token_type_ids], value=speaker1)
     ).to(arg.device)
-    mask = pad_sequence([torch.LongTensor(x) for x in mass], batch_first=True, padding_value=0).to(arg.device)
+    mask = torch.LongTensor(tf.keras.preprocessing.sequence.pad_sequences([torch.LongTensor(s) for s in mask], value=0)).to(
+        arg.device
+    )
+    position_ids = mask.long().cumsum(-1) - 1  # + prev_input.shape[1]
+    position_ids.masked_fill_(mask == 0, 1)
 
-    _, past = model(sequence, attention_mask=mask, token_type_ids=token_type_ids)
+    _, past = model(sequence, attention_mask=mask, token_type_ids=token_type_ids, position_ids=position_ids)
 
+    mask_append = torch.LongTensor([[1] for _ in range(len(history))]).to(arg.device)
     token_tp = torch.LongTensor([[speaker2] if len(x) % 2 else [speaker1] for x in history]).to(arg.device)
     prev = torch.LongTensor([[speaker2] if len(x) % 2 else [speaker1] for x in history]).to(arg.device)
 
     temp_sen = [[] for i in range(len(history))]
     for i_word in range(arg.max_length):
-        logits, past = model(prev, token_type_ids=token_tp, past=past)
+        mask = torch.cat((mask, mask_append), 1)
+        position_ids = mask.long().cumsum(-1) - 1
+        position_ids.masked_fill_(mask == 0, 1)
+        position_ids = position_ids[:, -1].unsqueeze(-1)
+
+        logits, past = model(prev, token_type_ids=token_tp, past=past, attention_mask=mask, position_ids=position_ids)
         logits = logits.squeeze(0).squeeze(1)
         # logits = top_filtering(logits, top_k=arg.top_k, top_p=arg.top_p)
         probs = torch.softmax(logits, dim=-1)
@@ -91,6 +98,7 @@ def generate_response(personality, history, tokenizer, model, arg):
     for i in range(len(temp_sen)):
         if temp_sen[i][-1] == eos:
             temp_sen[i][:] = temp_sen[i][:-1]
+
     return temp_sen
 
 
@@ -198,13 +206,12 @@ def validation(data_loader, model, interlocutor, tokenizer, bert_tokenizer, ppo,
             count += 1
         ppo.buffer.clear()
         ppo.buffer.sum_clear()
-    
+
     for i_turn in range(args.turn):
         reward_turn_sum[i_turn] /= count
-    
+
     # [reward_mean_turn_0, reward_mean_turn_1, ...]
     return reward_turn_sum
-
 
 
 def main():
@@ -218,14 +225,14 @@ def main():
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--epoch", type=int, default=2)
     parser.add_argument("--lr_actor", type=float, default=2e-5)
-    parser.add_argument("--lr_critic", type=float, default=1e-3)
+    parser.add_argument("--lr_critic", type=float, default=2e-4)
     parser.add_argument("--turn", type=int, default=1)
-    parser.add_argument("--sample_iter", type=int, default=20)
+    parser.add_argument("--sample_iter", type=int, default=10)
 
     # ppo
     parser.add_argument("--K_epochs", type=int, default=3)
-    parser.add_argument("--weight_critic", type=float, default=0.2)
-    parser.add_argument("--weight_entropy", type=float, default=0.02)
+    parser.add_argument("--weight_critic", type=float, default=1.0)
+    parser.add_argument("--weight_entropy", type=float, default=0.2)
     parser.add_argument("--use_threshold_entropy", type=bool, default=False)
     parser.add_argument("--threshold_entropy", type=float, default=100.0)
 
@@ -233,7 +240,7 @@ def main():
     parser.add_argument("--step_sample", type=int, default=50)
     parser.add_argument("--step_save", type=int, default=1000)
     parser.add_argument("--step_update", type=int, default=1)
-    parser.add_argument("--step_valid", type=int, default=100)
+    parser.add_argument("--step_valid", type=int, default=5)
 
     args = parser.parse_args()
     args.model_save_folder = os.path.join(args.root, args.save_dir, args.model_name)
@@ -251,7 +258,6 @@ def main():
     persona_pool = np.load("./clean_persona.npy")
     print("shape of persona_pool", np.shape(persona_pool))
 
-    # bert_model = BertModel.from_pretrained("bert-base-uncased")
     bert_model = BertForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=len(persona_pool))
     bert_tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
 
@@ -260,7 +266,6 @@ def main():
     # emo_model = EmoBertForMultiLabelClassification.from_pretrained("monologg/bert-base-cased-goemotions-original")
     # emo_tokenizer = BertTokenizer.from_pretrained("monologg/bert-base-cased-goemotions-group")
     # emo_model = EmoBertForMultiLabelClassification.from_pretrained("monologg/bert-base-cased-goemotions-group")
-
     # goemotions = MultiLabelPipeline(model=emo_model, tokenizer=emo_tokenizer, threshold=0.3)
 
     ppo = PPO(
@@ -278,7 +283,7 @@ def main():
     wandb.init(
         project="engaging-chatbot",
         entity="persona_chatbot_ntuee",
-        config = {
+        config={
             "batch_size": args.batch_size,
             "epoch": args.epoch,
             "lr_actor": args.lr_actor,
@@ -290,9 +295,8 @@ def main():
             "weight_critic": args.weight_critic,
             "weight_entropy": args.weight_entropy,
             "use_threshold_entropy": args.use_threshold_entropy,
-        }
+        },
     )
-
 
     print(
         """
@@ -309,6 +313,14 @@ def main():
         reward_sum = 0
         entropy_sum = 0
         for inter_persona_ori, history_ori, len_p, len_h in tqdm(train_loader):
+            if i_batch % args.step_valid == 0:
+                turn_rewards = validation(val_loader, model, interlocutor, tokenizer, bert_tokenizer, ppo, arg, args)
+                rewards_record = {}
+                for i_turn in range(args.turn):
+                    rewards_record[f"valid_reward_turn_{i_turn}"] = turn_rewards[i_turn]
+                rewards_record["valid_reward"] = sum(turn_rewards) / args.turn
+                wandb.log(rewards_record, step=i_batch)
+
             # recover inter_persona and history from padded datum
             inter_persona_enc = []
             for p_ori, lens in zip(inter_persona_ori, len_p):
@@ -359,7 +371,7 @@ def main():
                 loss_critic_sum += record["loss_critic"]
                 reward_sum += record["reward"]
                 entropy_sum += record["entropy"]
-                
+
             ppo.update()
 
             # if (i_batch+1) % args.step_update == 0:
@@ -368,7 +380,7 @@ def main():
                     "loss": loss_sum / args.step_update / args.K_epochs,
                     "loss_critic": loss_critic_sum / args.step_update / args.K_epochs,
                     "reward": reward_sum / args.step_update / args.K_epochs,
-                    "entropy": entropy_sum / args.step_update / args.K_epochs
+                    "entropy": entropy_sum / args.step_update / args.K_epochs,
                 },
                 step=i_batch,
             )
@@ -393,19 +405,13 @@ def main():
                     f.write(f"\n\n\n{i_epoch} epoch, {i_batch} batch:\n")
                     f.write(sample_str)
 
-            if i_batch % args.step_valid == 0:
-                turn_rewards = validation(val_loader, model, interlocutor, tokenizer, bert_tokenizer, ppo, arg, args)
-                turn_rewards_record = {}
-                for i_turn in range(args.turn):
-                    turn_rewards_record[f"reward_turn_{i_turn}"] = turn_rewards[i_turn]
-                wandb.log(turn_rewards_record, step=i_batch)
             if i_batch % args.step_save == 0:
                 torch.save(ppo.policy, os.path.join(args.model_save_folder, "model.bin"))
 
             i_batch += 1
 
-
     wandb.save(os.path.join(args.model_save_folder, "model.bin"))
+
 
 if __name__ == "__main__":
     main()
