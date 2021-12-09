@@ -10,28 +10,18 @@ from tqdm import tqdm
 import numpy as np
 import torch
 
-from transformers import (
-    BertModel,
-    BertTokenizer,
-    BertForSequenceClassification,
-)
+from transformers import BertModel, BertTokenizer, BertForSequenceClassification
 
-from train import (
-    get_data_loaders,
-)
+from train import get_data_loaders
 
 from Chatbot import *
 
 
 def analyze():
     parser = ArgumentParser()
-    parser.add_argument(
-        "--model_checkpoint", type=str, default="model/gpt2_persona_model/"
-    )
+    parser.add_argument("--model_checkpoint", type=str, default="model/gpt2_persona_model/")
     parser.add_argument("--save_dir", type=str, default="model/")
-    parser.add_argument(
-        "--model_name", type=str, default="new_b16_l-5_d2"
-    )  # persona selector model folder
+    parser.add_argument("--model_name", type=str, default="new_b16_l-5_d2")  # persona selector model folder
     parser.add_argument("--load_model_path", type=str, default="")
     parser.add_argument("--work_space", type=str, default=".")
     parser.add_argument("--batch_size", type=int, default=16)
@@ -46,20 +36,14 @@ def analyze():
     model, interlocutor, tokenizer, arg = prepare_chatbot(
         os.path.join(args.work_space, args.model_checkpoint), bt=args.batch_size
     )
-    train_loader, val_loader, train_sampler, valid_sampler = get_data_loaders(
-        arg, tokenizer
-    )
+    train_loader, val_loader, train_sampler, valid_sampler = get_data_loaders(arg, tokenizer)
     del train_loader, train_sampler, valid_sampler
     print("\n\nlen(val_loader): ", len(val_loader), "\n\n")
     bert_tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
     bert_model = BertModel.from_pretrained("bert-base-uncased")
-    bert_model = BertForSequenceClassification.from_pretrained(
-        "bert-base-uncased", num_labels=6732
-    )
+    bert_model = BertForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=6732)
     bert_model.eval()
-    persona_selector, persona_pool = prepare_persona_selector(
-        load_path=args.load_model_path
-    )
+    persona_selector, persona_pool = prepare_persona_selector(load_path=args.load_model_path)
 
     print(
         """
@@ -69,17 +53,12 @@ def analyze():
     )
 
     with torch.no_grad():
-        for input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids in tqdm(
-            val_loader
-        ):
+        for input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids in tqdm(val_loader):
             total_rw = []
             for i_p, persona_i in enumerate(persona_pool[:30]):
                 print(f"{i_p}: {persona_i}")
                 persona_bot = [persona_i for _ in range(args.batch_size)]
-                persona_bot_enc = [
-                    tokenizer.encode_plus(p_i, return_attention_mask=False)["input_ids"]
-                    for p_i in persona_bot
-                ]
+                persona_bot_enc = [tokenizer.encode_plus(p_i, return_attention_mask=False)["input_ids"] for p_i in persona_bot]
 
                 score_record = []
                 # ===== select persona for interlocutor ========
@@ -131,41 +110,31 @@ def analyze():
                 #     print(tokenizer.decode(sen_enc))
 
                 # ===== generate s1 from interlocutor ==========
-                response_enc = generate_response(
-                    interlocutor_persona_enc, history_enc, tokenizer, interlocutor, arg
-                )
+                response_enc = generate_response(interlocutor_persona_enc, history_enc, tokenizer, interlocutor, arg)
                 for i in range(args.batch_size):
                     history_enc[i].append(response_enc[i])
 
                 value_init = get_score([h[-2:] for h in history_enc], tokenizer)
 
                 # ===== generate s2 ============================
-                response_enc = generate_response(
-                    persona_bot_enc, history_enc, tokenizer, model, arg
-                )
+                response_enc = generate_response(persona_bot_enc, history_enc, tokenizer, model, arg)
                 for i in range(args.batch_size):
                     history_enc[i].append(response_enc[i])
 
                 # ===== generate s3 from interlocutor ==========
-                response_enc = generate_response(
-                    interlocutor_persona_enc, history_enc, tokenizer, interlocutor, arg
-                )
+                response_enc = generate_response(interlocutor_persona_enc, history_enc, tokenizer, interlocutor, arg)
                 for i in range(args.batch_size):
                     history_enc[i].append(response_enc[i])
 
                 score_record.append(get_score([h[-2:] for h in history_enc], tokenizer))
 
                 # ===== generate s4 ============================
-                response_enc = generate_response(
-                    persona_bot_enc, history_enc, tokenizer, model, arg
-                )
+                response_enc = generate_response(persona_bot_enc, history_enc, tokenizer, model, arg)
                 for i in range(args.batch_size):
                     history_enc[i].append(response_enc[i])
 
                 # ===== generate s5 from interlocutor ==========
-                response_enc = generate_response(
-                    interlocutor_persona_enc, history_enc, tokenizer, interlocutor, arg
-                )
+                response_enc = generate_response(interlocutor_persona_enc, history_enc, tokenizer, interlocutor, arg)
                 for i in range(args.batch_size):
                     history_enc[i].append(response_enc[i])
 

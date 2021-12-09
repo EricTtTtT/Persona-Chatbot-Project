@@ -10,6 +10,7 @@ from torch.distributions import Categorical
 from transformers import BertTokenizer, BertModel
 from trl.gpt2 import GPT2HeadWithValueModel, respond_to_batch
 from trl.ppo import PPOTrainer
+
 device = torch.device("cuda:0")
 selector_history = 5
 
@@ -21,13 +22,9 @@ class PersonaSelector(nn.Module):
         # not using dropout for RL training stability
         # Input dim : 768
         # Output dim : 6732
-        self.value_net = bert_model 
-                    
-        self.critic_net = nn.Sequential(
-                        nn.Linear(768, 192),
-                        nn.Linear(192, 48),
-                        nn.Linear(48 , 1)
-                    )
+        self.value_net = bert_model
+
+        self.critic_net = nn.Sequential(nn.Linear(768, 192), nn.Linear(192, 48), nn.Linear(48, 1))
         self.value_optim = torch.optim.Adam(self.value_net.parameters(), lr=lr * 3)
         self.critic_optim = torch.optim.Adam(self.critic_net.parameters(), lr=lr * 3)
 
@@ -40,6 +37,7 @@ class PersonaSelector(nn.Module):
 
         self.critic_loss_record = []
         self.value_loss_record = []
+
     def forward(self, **encode_input):
         output = self.value_net(**encode_input, output_hidden_states=True)
         last_layer_output = output[1][0].mean(1)
@@ -48,7 +46,7 @@ class PersonaSelector(nn.Module):
         critic_value = self.critic_net(last_layer_output)
         # print("critic is ", critic_value)
         # print("critic looks like ", np.shape(critic_value))
-        
+
         prob = F.softmax(output[0], dim=-1)
         distribution = Categorical(prob)
         # print("distri is ", distribution)
@@ -58,7 +56,7 @@ class PersonaSelector(nn.Module):
         # exit(0)
         return persona_id.cpu().detach().numpy(), log_prob, entropy, critic_value
 
-    def learn(self, rewards, critic_value, log_prob) :
+    def learn(self, rewards, critic_value, log_prob):
         # pass
         accumulate_reward = []
         Advantage = []
@@ -67,7 +65,7 @@ class PersonaSelector(nn.Module):
             Advantage.append(accumulate_reward[-1] - critic_value[0][i])
             accumulate_reward.append(rewards[1][i])
             Advantage.append(accumulate_reward[-1] - critic_value[1][i])
-        
+
         # print("Accumulate is ", accumulate_reward)
         # print("Accumulate is ", np.shape(accumulate_reward))
         # print("Advantage is ", Advantage)
@@ -82,7 +80,7 @@ class PersonaSelector(nn.Module):
         critic_value = torch.tensor(new_critic_value, requires_grad=True)
         self.value_loss -= (Advantage * log_prob).sum()
         self.value_loss_record.append(self.value_loss.item())
-        loss_func  = nn.SmoothL1Loss()
+        loss_func = nn.SmoothL1Loss()
         # print("accumulate is ", accumulate_reward)
         # print("accumulate is ", accumulate_reward.size())
         # print("critic is ", critic_value)
@@ -95,7 +93,7 @@ class PersonaSelector(nn.Module):
         self.value_optim.zero_grad()
         self.value_loss.backward()
         self.value_optim.step()
-        
+
         self.critic_optim.zero_grad()
         self.critic_loss.backward()
         self.critic_optim.step()
@@ -103,10 +101,8 @@ class PersonaSelector(nn.Module):
         self.critic_loss = 0
         # exit(0)
 
-        
 
-
-def prepare_persona_selector(bert_model, lr, load_path="" ):
+def prepare_persona_selector(bert_model, lr, load_path=""):
     # ==========Training Prepare===========================
     persona_selector = PersonaSelector(bert_model, lr)
     if load_path != "":
@@ -136,9 +132,7 @@ def prepare_persona_selector(bert_model, lr, load_path="" ):
     return persona_selector, persona_pool
 
 
-def select_persona(
-    persona_selector, persona_pool, history_sentences, tokenizer, model, valid=False
-):
+def select_persona(persona_selector, persona_pool, history_sentences, tokenizer, model, valid=False):
     if not valid:
         persona_selector.train()
     persona_selector.to(device)
@@ -151,13 +145,7 @@ def select_persona(
         for s in history_sentences[i]:
             temp += s + " [SEP] "
         total.append(temp)
-    encode_input = tokenizer(
-        total,
-        add_special_tokens=False,
-        truncation=True,
-        padding=True,
-        return_tensors="pt",
-    ).to(device)
+    encode_input = tokenizer(total, add_special_tokens=False, truncation=True, padding=True, return_tensors="pt").to(device)
     persona_id, log_prob, entropy, critic_value = persona_selector(**encode_input)
     # output = model(**encode_input)
     # persona_id, log_prob, entropy, critic_value = persona_selector(output[1])

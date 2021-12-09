@@ -4,7 +4,6 @@ import torch.nn as nn
 from torch.distributions import Categorical
 import torch.nn.functional as F
 import numpy as np
-import os
 
 # set device to cpu or cuda
 if torch.cuda.is_available():
@@ -22,7 +21,7 @@ class RolloutBuffer:
         self.states = []
         self.logprobs = []
         self.rewards = []
-        
+
         self.loss_sum = 0
         self.loss_critic_sum = 0
         self.rewards_sum = 0
@@ -45,6 +44,7 @@ class RolloutBuffer:
 
     def size(self):
         return np.shape(self.actions[0])
+
 
 class ActorCritic(nn.Module):
     def __init__(self, bert_model, persona_pool, state_dim=768, action_dim=6732, action_std_init=0.6):
@@ -115,7 +115,7 @@ class PPO:
         action_std_init=0.3,
         critic_cof=1.0,
         entropy_cof=0.001,
-        threshold_entropy=5.0
+        threshold_entropy=5.0,
     ):
         self.gamma = gamma
         self.eps_clip = eps_clip
@@ -222,12 +222,11 @@ class PPO:
         loss_critic = self.MseLoss(state_values, rewards).mean()
         entropy_mean = dist_entropy.mean()
         if use_threshold and entropy_mean > self.threshold_entropy:
-            loss = -torch.min(surr1, surr2) + self.critic_cof*loss_critic
+            loss = -torch.min(surr1, surr2) + self.critic_cof * loss_critic
         else:
-            loss = -torch.min(surr1, surr2) + self.critic_cof*loss_critic - (self.entropy_cof*entropy_mean)
+            loss = -torch.min(surr1, surr2) + self.critic_cof * loss_critic - (self.entropy_cof * entropy_mean)
         # loss = -torch.min(surr1, surr2) + self.critic_cof * loss_critic
         loss.backward()
-
 
         self.buffer.loss_sum += loss.detach().cpu()
         self.buffer.loss_critic_sum += loss_critic.detach().cpu()
@@ -236,7 +235,6 @@ class PPO:
 
         self.buffer.clear()
 
-    
     def step(self, sample_iter):
         self.optimizer.step()
         self.optimizer.zero_grad()
@@ -245,14 +243,13 @@ class PPO:
             "loss": self.buffer.loss_sum / sample_iter,
             "loss_critic": self.buffer.loss_critic_sum / sample_iter,
             "reward": self.buffer.rewards_sum / sample_iter,
-            "entropy": self.buffer.entropy_sum / sample_iter
+            "entropy": self.buffer.entropy_sum / sample_iter,
         }
         self.buffer.sum_clear()
         return ret
 
     def update(self):
         self.policy_old.load_state_dict(self.policy.state_dict())
-
 
     # def draw(self):
 

@@ -19,7 +19,7 @@ from torch.nn.utils.rnn import pad_sequence
 from train import SPECIAL_TOKENS, add_special_tokens_, get_data_loaders_persona
 import wandb
 
-from PPO_emo import PPO
+from PPO import PPO
 
 from Engaging_classifier import analyze_engagement
 
@@ -201,8 +201,8 @@ def validation(data_loader, model, interlocutor, tokenizer, bert_tokenizer, ppo,
                     history_enc = [h + [r] for h, r in zip(history_enc, response_enc)]
                 score = get_score([h[-2:] for h in history_enc], tokenizer)
                 score_record.append(sum(score) / len(score))
-            
-            if  not sample_flag:
+
+            if not sample_flag:
                 sample_str = "\nvalid sample dialog:\n#########################\n"
                 for j in range(args.batch_size):
                     sample_str += "\n#########################\n"

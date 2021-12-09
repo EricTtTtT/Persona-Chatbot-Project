@@ -61,9 +61,7 @@ class Engagement_cls:
         self.query_emb = {}
         self.reply_emb = {}
         model_config = BertConfig(output_hidden_states=True)
-        self.bert_model = BertModel.from_pretrained(
-            "bert-base-uncased", config=model_config
-        )
+        self.bert_model = BertModel.from_pretrained("bert-base-uncased", config=model_config)
         self.bert_tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
         self.model = BiLSTM(mlp_hidden_dim=self.mlp_hidden_dim, dropout=self.dropout)
         if torch.cuda.is_available():
@@ -71,9 +69,7 @@ class Engagement_cls:
             self.bert_model.to(device_1)
 
             # print(device_1)
-        self.model.load_state_dict(
-            torch.load(self.train_dir + "best_model_finetuned.pt")
-        )
+        self.model.load_state_dict(torch.load(self.train_dir + "best_model_finetuned.pt"))
         info = torch.load(self.train_dir + "best_model_finetuned.info")
         self.model.eval()
         self.bert_model.eval()
@@ -138,9 +134,7 @@ class Engagement_cls:
 
         """
 
-        model_output = self.model(
-            self.query, self.reply, self.query_emb, self.reply_emb
-        )
+        model_output = self.model(self.query, self.reply, self.query_emb, self.reply_emb)
         pred_eng = torch.nn.functional.softmax(model_output, dim=1)
 
         return pred_eng
@@ -157,9 +151,7 @@ class Engagement_cls:
            
         """
         if not os.path.isfile(self.train_dir + "best_model_finetuned.pt"):
-            print(
-                "There is not any finetuned model on DD dataset to be used!\nPlease first try to finetune trained model."
-            )
+            print("There is not any finetuned model on DD dataset to be used!\nPlease first try to finetune trained model.")
             return
 
         model_output = self.model(query, reply, q_embed, r_embed)
@@ -197,37 +189,17 @@ class BiLSTM(nn.Module):
             # print("Query is ",q)
             # print("Query Embedding is ",queries_embeds[q])
             if q not in queries_embeds.keys():
-                print(
-                    "the query {} embedding has not been found in the embedding file".format(
-                        q
-                    )
-                )
+                print("the query {} embedding has not been found in the embedding file".format(q))
         # X_q = torch.zeros(1,1,60)
         # X_r = torch.zeros(1,1,60)
-        self.X_q = (
-            torch.tensor(
-                [queries_embeds[q].cpu().detach().numpy() for q in queries_input]
-            )
-            .squeeze(1)
-            .to(device_1)
-        )
+        self.X_q = torch.tensor([queries_embeds[q].cpu().detach().numpy() for q in queries_input]).squeeze(1).to(device_1)
         # print("Q is ",X_q.size())
         for r in replies_input:
             # print("Query is ",r)
             # print("Reply Embedding is ",replies_embeds[r])
             if r not in replies_embeds.keys():
-                print(
-                    "the reply {} embedding has not been found in the embedding file".format(
-                        r
-                    )
-                )
-        self.X_r = (
-            torch.tensor(
-                [replies_embeds[r].cpu().detach().numpy() for r in replies_input]
-            )
-            .squeeze(1)
-            .to(device_1)
-        )
+                print("the reply {} embedding has not been found in the embedding file".format(r))
+        self.X_r = torch.tensor([replies_embeds[r].cpu().detach().numpy() for r in replies_input]).squeeze(1).to(device_1)
         # print("R is ",X_r.size())
         if torch.cuda.is_available():
             self.X_q, self.X_r = self.X_q.to(device_1), self.X_r.to(device_1)
@@ -250,9 +222,7 @@ class BiLSTM(nn.Module):
         return mlp_out
 
 
-eng_cls = Engagement_cls(
-    train_dir, batch_size, mlp_hidden_dim, epochs, reg, lr, dropout, optimizer
-)
+eng_cls = Engagement_cls(train_dir, batch_size, mlp_hidden_dim, epochs, reg, lr, dropout, optimizer)
 
 
 def analyze_engagement(queries, replies):
