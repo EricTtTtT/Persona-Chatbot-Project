@@ -33,6 +33,7 @@ from train import (
 from Engaging_classifier import analyze_engagement
 from Persona_Selector import prepare_persona_selector, select_persona
 from tensorboardX import SummaryWriter
+import wandb
 from PPO_emo_ac import PPO
 from remove_duplicate_persona import remove_duplicate_persona
 # from collections import defaultdict
@@ -137,7 +138,7 @@ def generate_response(personality, history, tokenizer, model, arg):
     return temp_sen
 
 
-def prepare_chatbot(check_point, bt=8, root="."):
+def prepare_chatbot(check_point, bt=8, root=".", seed = 1000):
     class ARG:
         def __init__(self):
             self.dataset_path = os.path.join(
@@ -151,7 +152,7 @@ def prepare_chatbot(check_point, bt=8, root="."):
             self.no_sample = False
             self.max_length = 40
             self.min_length = 1
-            self.seed = 2
+            self.seed = seed
             self.temperature = 1
             self.top_k = 0
             self.top_p = 0
@@ -160,7 +161,8 @@ def prepare_chatbot(check_point, bt=8, root="."):
             self.local_rank = -1
             self.train_batch_size = bt
             self.valid_batch_size = bt
-
+            # print("batch_size is ", self.train_batch_size)
+            # exit(0)
     arg = ARG()
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__file__)
@@ -208,10 +210,12 @@ def main():
 
     # hyper parameters
     parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--epoch", type=int, default=4)
-    parser.add_argument("--ac_lr", type=float, default=5e-6)
+    parser.add_argument("--epoch", type=int, default=1)
+    parser.add_argument("--ac_lr", type=float, default=3e-5)
     parser.add_argument("--cr_lr", type=float, default=0.005)
     parser.add_argument("--turn", type=int, default=1)
+    parser.add_argument("--K_epoch", type=int, default=3)
+    parser.add_argument("--sample_size", type=int, default=10)
     
     # steps
     parser.add_argument("--step_sample", type=int, default=200)
@@ -225,12 +229,12 @@ def main():
 
     # ===== prepare dataset, models and optimizer ==========
     model, interlocutor, tokenizer, arg = prepare_chatbot(
-        os.path.join(args.work_space, args.model_checkpoint), bt=args.batch_size
+        os.path.join(args.work_space, args.model_checkpoint), bt=args.batch_size, seed = 9999
     )
     train_loader, val_loader, train_sampler, valid_sampler = get_data_loaders_persona(
         arg, tokenizer
     )
-    del val_loader, train_sampler, valid_sampler
+    del train_sampler, valid_sampler
 
     # persona_pool = remove_duplicate_persona()
     persona_pool = np.load("./clean_persona.npy")
@@ -255,7 +259,36 @@ def main():
 
 
 
-    ppo = PPO(persona_pool = persona_pool ,bert_model = bert_model, lr_actor = float(args.ac_lr), lr_critic=float(args.cr_lr))
+    ppo = PPO(persona_pool = persona_pool ,bert_model = bert_model, lr_actor = float(args.ac_lr), lr_critic=float(args.cr_lr), sample_size=args.sample_size, K_epochs=args.K_epoch, seed = arg.seed)
+    # wandb.init(project="persona_chatbot", entity="erictien")
+    print("Seed is ", arg.seed)
+    wandb.init(
+        project="give_me_entropy", 
+        entity="persona_chatbot_ntuee",
+        config = {
+        "batch_size": args.batch_size,
+        "epoch": args.epoch,
+        "lr_actor": ppo.lr_actor,
+        "lr_critic": ppo.lr_critic,
+        "turn": args.turn,
+        "sample_iter": args.sample_size,
+        "step_update": args.step_update,
+        "K_epochs": ppo.K_epochs,
+        "random_seed" : arg.seed
+        }
+    )
+
+    # wandb.config = {
+    #     "batch_size": args.batch_size,
+    #     "epoch": args.epoch,
+    #     "lr_actor": ppo.lr_actor,
+    #     "lr_critic": ppo.lr_critic,
+    #     "turn": args.turn,
+    #     "sample_iter": args.sample_size,
+    #     "step_update": args.step_update,
+    #     "K_epochs": ppo.K_epochs
+        
+    # }
     # persona_selector.id_selector.train()
     # persona_selector.train()
     # optimizer = torch.optim.Adam(persona_selector.parameters(), lr = args.lr)
@@ -272,7 +305,6 @@ def main():
     )
 
     i_batch = 0
-    sample_size = 2
     for i_epoch in range(args.epoch):
         for inter_persona_ori, history_ori, len_p, len_h in tqdm(
             train_loader
@@ -291,41 +323,50 @@ def main():
                         tmp.append((h_ori[j:j+l]).tolist())
                         j += l
                 history_enc.append(tmp)
-            
-            for t in range(sample_size):
-                # print("T is ", t)
-                persona_bot_record = []
-            
-                for i_turn in range(args.turn):
-                    # get chatbot persona
-                    history = [[tokenizer.decode(s) for s in h] for h in history_enc]
-                    persona_bot = ppo.select_action(history, bert_tokenizer)
-                    persona_bot_enc = [tokenizer.encode(p) for p in persona_bot]
-                    persona_bot_record.append(persona_bot)
+            save_history_enc = history_enc
+            for k in range(args.K_epoch):
+                for t in range(args.sample_size):
+                    # print("T is ", t)
+                    persona_bot_record = []
+                    history_enc = save_history_enc
+                    for i_turn in range(args.turn):
+                        # get chatbot persona
+                        history = [[tokenizer.decode(s) for s in h] for h in history_enc]
+                        persona_bot = ppo.select_action(history, bert_tokenizer)
+                        # print("Buffer size ", ppo.buffer.size())
+                        persona_bot_enc = [tokenizer.encode(p) for p in persona_bot]
+                        persona_bot_record.append(persona_bot)
+                        
+                        # generate one turn response
+                        with torch.no_grad():
+                            # chatbot
+                            response_enc = generate_response(
+                                persona_bot_enc, history_enc, tokenizer, model, arg
+                            )
+                            history_enc = [h + [r] for h, r in zip(history_enc, response_enc)]
+
+                            # interlocutor
+                            response_enc = generate_response(
+                                inter_persona_enc, history_enc, tokenizer, interlocutor, arg
+                            )
+                            history_enc = [h + [r] for h, r in zip(history_enc, response_enc)]
+                        try_text = [tokenizer.decode(h[-1]) for h in history_enc]
+                        ppo.buffer.rewards.append(goemotions.get_positive_score(try_text))
                     
-                    # generate one turn response
-                    with torch.no_grad():
-                        # chatbot
-                        response_enc = generate_response(
-                            persona_bot_enc, history_enc, tokenizer, model, arg
-                        )
-                        history_enc = [h + [r] for h, r in zip(history_enc, response_enc)]
-
-                        # interlocutor
-                        response_enc = generate_response(
-                            inter_persona_enc, history_enc, tokenizer, interlocutor, arg
-                        )
-                        history_enc = [h + [r] for h, r in zip(history_enc, response_enc)]
-                    try_text = [tokenizer.decode(h[-1]) for h in history_enc]
-                    ppo.buffer.rewards.append(goemotions.get_positive_score(try_text))
-                
-                if i_batch % (args.step_update * sample_size) == 0:
-                    ppo.update_writer(writer=writer, i_iter=i_batch, turn=args.turn, accum_size = sample_size, step=True)
-                elif i_batch % args.step_update == 0:
-                    ppo.update_writer(writer=writer, i_iter=i_batch, turn=args.turn, accum_size = sample_size)
-
-
-                i_batch += 1
+                    # if i_batch % args.step_update == 0:
+                    loss, critic_loss, entropy, reward = ppo.update_writer( turn=args.turn, accum_size = args.sample_size)
+                    wandb.log(
+                        {
+                            "loss": loss ,
+                            "loss_critic": critic_loss,
+                            "reward": reward,
+                            "entropy": entropy
+                        },
+                        step=i_batch,
+                    )
+                    # if i_batch % (args.step_update * args.sample_size) == 0:
+                    i_batch += 1
+                ppo.update()
                 if i_batch % args.step_sample == 0:
                     for j in range(args.batch_size):
                         sample_str = "\n#########################\n"
@@ -342,7 +383,60 @@ def main():
                 
                 if i_batch % args.step_save == 0:
                     torch.save(ppo.policy, os.path.join(ppo.output_dir, "model.bin"))
+            print("***************************************")
+            print("Start Validation")
+            print("***************************************")
+            with torch.no_grad():
+                valid_reward = []
+                for inter_persona_ori, history_ori, len_p, len_h in tqdm(val_loader):
+                    # recover inter_persona and history from padded datum
+                    inter_persona_enc = []
+                    for p_ori, lens in zip(inter_persona_ori, len_p):
+                        l = sum(lens)
+                        inter_persona_enc.append(p_ori[:l].tolist())
+                    history_enc = []
+                    for h_ori, lens in zip(history_ori, len_h):
+                        tmp = []
+                        j = 0
+                        for l in lens:
+                            if l > 0:
+                                tmp.append((h_ori[j:j+l]).tolist())
+                                j += l
+                        history_enc.append(tmp)
+                    for i_turn in range(args.turn):
+                        # get chatbot persona
+                        history = [[tokenizer.decode(s) for s in h] for h in history_enc]
+                        persona_bot = ppo.select_action(history, bert_tokenizer, valid=True)
+                        # print("Buffer size ", ppo.buffer.size())
+                        persona_bot_enc = [tokenizer.encode(p) for p in persona_bot]
+                        persona_bot_record.append(persona_bot)
+                        
+                        # generate one turn response
+                        # with torch.no_grad():
+                            # chatbot
+                        response_enc = generate_response(
+                            persona_bot_enc, history_enc, tokenizer, model, arg
+                        )
+                        history_enc = [h + [r] for h, r in zip(history_enc, response_enc)]
 
-    ppo.draw()
+                        # interlocutor
+                        response_enc = generate_response(
+                            inter_persona_enc, history_enc, tokenizer, interlocutor, arg
+                        )
+                        history_enc = [h + [r] for h, r in zip(history_enc, response_enc)]
+                        try_text = [tokenizer.decode(h[-1]) for h in history_enc]
+                        # print("Try text is ", try_text)
+                        valid_reward.append(np.mean(goemotions.get_positive_score(try_text)))
+                    # exit(0)
+            wandb.log(
+                    {
+                        "valid_reward": np.mean(valid_reward) ,
+                        "valid_reward_std": np.std(valid_reward)
+                        
+                    },
+                    step=i_batch,
+                )
+                
+
 if __name__ == "__main__":
     main()

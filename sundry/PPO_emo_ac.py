@@ -49,7 +49,12 @@ class RolloutBuffer:
         del self.logprobs[:]
         del self.rewards[:]
         del self.is_terminals[:]
-
+        
+    def __sizeof__(self) -> int:
+        return len(self.actions)
+    def size(self):
+        return np.shape(self.actions[0])
+    
 
 class ActorCritic(nn.Module):
     def __init__(self, bert_model, persona_pool, state_dim = 768, action_dim = 6732, action_std_init = 0.6):
@@ -78,7 +83,10 @@ class ActorCritic(nn.Module):
     def act(self, **state):
 
         output = self.actor(**state)
+        # print("output size ", output.size())
+        # print("output[0] size ", output[0].size())
         action_probs = F.softmax(output[0], dim = -1)
+        # print("action_probs size ", action_probs.size())
         dist = Categorical(action_probs)
         # print("Dist ", dist.size())
         # Replace sample with argmax
@@ -114,8 +122,8 @@ class ActorCritic(nn.Module):
 
 
 class PPO:
-    def __init__(self, persona_pool, bert_model, state_dim = 1608, action_dim = 6732, lr_actor = 0.00002, lr_critic = 0.05,
-                 gamma = 0.99, K_epochs = 3, eps_clip  = 0.5, action_std_init=0.3, critic_cof=1.0, entropy_cof = 0.001):
+    def __init__(self, persona_pool, bert_model, state_dim = 1608, action_dim = 6732, lr_actor = 0.000002, lr_critic = 0.05,
+                 gamma = 0.99, K_epochs = 3, eps_clip  = 0.5, action_std_init=0.3, critic_cof=0.5, entropy_cof = 0.001, sample_size = 10, seed = 1000):
         # print("output dir is ", self.output_dir)
         # exit(0)
         self.gamma = gamma
@@ -131,7 +139,7 @@ class PPO:
         print("**********************************************")
         # exit(0)
         self.root_dir = "./Emo_PPO_output"
-        self.output_dir = f"loss_accum_lra_{lr_actor}_lrc_{lr_critic}_gamma_{gamma}_K_{K_epochs}_eps_{eps_clip}_actionstd_{action_std_init}_cri_{self.critic_cof}_entr_{self.entropy_cof}_"
+        self.output_dir = f"loss_accum_samplesize_{sample_size}_lra_{lr_actor}_lrc_{lr_critic}_gamma_{gamma}_K_{K_epochs}_eps_{eps_clip}_actionstd_{action_std_init}_cri_{self.critic_cof}_entr_{self.entropy_cof}_seed_{seed}"
         self.output_dir = os.path.join(self.root_dir, self.output_dir)
         self.lr_actor = lr_actor
         self.lr_critic = lr_critic
@@ -191,9 +199,10 @@ class PPO:
         action, action_logprob, persona_id = self.policy_old.act(**encode_input)
         
         # All of them are one batch [a1, a2, ..., a16], [logp1, logp2, ...., logp16]
-        self.buffer.states.append(history_sentences)
-        self.buffer.actions.append(persona_id)
-        self.buffer.logprobs.append(action_logprob)
+        if not valid:
+            self.buffer.states.append(history_sentences)
+            self.buffer.actions.append(persona_id)
+            self.buffer.logprobs.append(action_logprob)
 
         return action
     def evaluate(self, history_sentences, action):
@@ -217,9 +226,12 @@ class PPO:
     def update(self): 
         self.optimizer.step()
         self.optimizer.zero_grad()
-        self.loss = 0
+        # self.loss = 0
+        ## Copy new weights into old policy
+        self.policy_old.load_state_dict(self.policy.state_dict())
+        
 
-    def update_writer(self, writer, i_iter=0, turn=2, step = False, accum_size=5):
+    def update_writer(self, turn=2, accum_size=5):
         # turn batch datum in self.buffer to an array
         rewards = []
         logprobs = []
@@ -234,9 +246,9 @@ class PPO:
                 states.append(self.buffer.states[j][i])
     
         # Normalizing the rewards
-        self.reward_record.append(np.mean(rewards))
+        REWARD = np.mean(rewards)
+        # self.reward_record.append(np.mean(rewards))
         rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
-        writer.add_scalar("reward", rewards.mean(), i_iter)
         mean = rewards.mean()
         rewards = ((rewards - mean) / (rewards.std() + 1e-7)) + mean
 
@@ -247,77 +259,49 @@ class PPO:
         logprobs = torch.tensor(logprobs, requires_grad=True)
         
         # Optimize policy for K epochs
-        entropy_sum = 0
-        loss_sum = 0
-        critic_loss_sum = 0
-        for _ in range(self.K_epochs):
+        # for _ in range(self.K_epochs):
             # Evaluating old actions and values
-            new_logprobs, state_values, dist_entropy = self.evaluate(states, actions)
-            # new_logprobs,  dist_entropy = self.evaluate(states, actions)
-            # match state_values tensor dimensions with rewards tensor
-            state_values = torch.squeeze(state_values)
-            
-            # Finding the ratio (pi_theta / pi_theta__old)
-            ratios = torch.exp(new_logprobs - logprobs.to(self.device))
-            
-            # Finding Surrogate Loss
-            advantages = (rewards - state_values.detach())
-            # advantages = rewards
-            surr1 = (ratios * advantages).mean()
-            surr2 = (torch.clamp(ratios, 1-self.eps_clip, 1+self.eps_clip) * advantages).mean()
-
-            # final loss of clipped objective PPO
-            # critic_loss = torch.clamp(self.MseLoss(state_values, rewards), 0, 10)
-            critic_loss = self.MseLoss(state_values, rewards).mean()
-            
-            # loss = -torch.min(surr1, surr2) + self.critic_cof*critic_loss + (self.entropy_cof*dist_entropy.mean())
-            loss = (-torch.min(surr1, surr2) + self.critic_cof*critic_loss) / accum_size 
-            # loss = -torch.min(surr1, surr2) - (self.entropy_cof * dist_entropy.sum())
-            # loss = torch.clamp(loss, -1000, 1000)
-            if np.random.rand() < 0.05:
-                print("surr", -torch.min(surr1, surr2))
-                print("Advantage is ", advantages.mean())
-                print("Rewards is ", rewards.mean())
-                print("state value ", state_values.mean())
-                # print("surr2", surr2)
-                # print("advantage : ", advantages)
-                print("critic loss : ", critic_loss)
-                print("dist_entropy.sum()", dist_entropy.mean())
-                if surr2 < surr1:
-                    print("!!! surr2 clamp !!!")
-                print("loss", loss)
-            loss.backward()
-            if step:
-                self.optimizer.step()
-                self.optimizer.zero_grad()
-            # clip_grad_norm_(self.policy.actor.parameters(), 10)
-            # clip_grad_norm_(self.policy.critic.parameters(), 10)
-            # take gradient step
-            
-            loss = loss.detach().cpu()
-            dist_entropy = dist_entropy.detach().cpu()
-            critic_loss = critic_loss.detach().cpu()
-            loss_sum += loss
-            entropy_sum += dist_entropy.sum()
-            critic_loss_sum += critic_loss
+        new_logprobs, state_values, dist_entropy = self.evaluate(states, actions)
+        # new_logprobs,  dist_entropy = self.evaluate(states, actions)
+        # match state_values tensor dimensions with rewards tensor
+        state_values = torch.squeeze(state_values)
         
-        # if loss_sum < 1000 * self.K_epochs:
-        self.loss_record.append(loss_sum / self.K_epochs)
-        # if critic_loss_sum < 1000 * self.K_epochs:
-        self.critic_loss_record.append(critic_loss_sum / self.K_epochs)
-        # if entropy_sum < 1000 * self.K_epochs:
-        self.entropy_record.append(entropy_sum / self.K_epochs)
-        writer.add_scalar("entropy", entropy_sum / self.K_epochs, i_iter)
-        writer.add_scalar("loss", loss_sum / self.K_epochs, i_iter)
-        writer.add_scalar("critic", critic_loss_sum / self.K_epochs, i_iter)
+        # Finding the ratio (pi_theta / pi_theta__old)
+        ratios = torch.exp(new_logprobs - logprobs.to(self.device))
+        
+        # Finding Surrogate Loss
+        advantages = (rewards - state_values.detach())
+        # advantages = rewards
+        surr1 = (ratios * advantages).mean()
+        surr2 = (torch.clamp(ratios, 1-self.eps_clip, 1+self.eps_clip) * advantages).mean()
 
-        # Copy new weights into old policy
-        self.policy_old.load_state_dict(self.policy.state_dict())
+        # final loss of clipped objective PPO
+        # critic_loss = torch.clamp(self.MseLoss(state_values, rewards), 0, 10)
+        critic_loss = self.MseLoss(state_values, rewards).mean()
+        
+        # loss = -torch.min(surr1, surr2) + self.critic_cof*critic_loss + (self.entropy_cof*dist_entropy.mean())
+        loss = (-torch.min(surr1, surr2) + self.critic_cof*critic_loss) / accum_size 
+        # loss = -torch.min(surr1, surr2) - (self.entropy_cof * dist_entropy.sum())
+        # loss = torch.clamp(loss, -1000, 1000)
+        if np.random.rand() < 0.05:
+            print("surr", -torch.min(surr1, surr2).item())
+            print("Advantage is ", advantages.mean().item())
+            print("Rewards is ", rewards.mean().item())
+            print("state value ", state_values.mean().item())
+            # print("surr2", surr2)
+            # print("advantage : ", advantages)
+            print("critic loss : ", critic_loss.item())
+            print("dist_entropy.sum()", dist_entropy.mean().item())
+            if surr2 < surr1:
+                print("!!! surr2 clamp !!!")
+            print("loss", loss.item())
+        loss.backward()
 
         # clear buffer
         self.buffer.clear()
-        if np.random.rand() < 0.05:
-            self.draw()
+        return loss.item(), critic_loss.item(), dist_entropy.mean().item(), REWARD
+        # if np.random.rand() < 0.05:
+        #     self.draw()
     def draw(self):
         
         import matplotlib.pyplot as plt
