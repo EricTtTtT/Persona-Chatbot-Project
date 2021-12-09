@@ -14,7 +14,6 @@ import torch
 import tensorflow as tf
 
 from transformers import GPT2LMHeadModel, GPT2Tokenizer, BertTokenizer, BertForSequenceClassification
-from torch.nn.utils.rnn import pad_sequence
 
 from train import SPECIAL_TOKENS, add_special_tokens_, get_data_loaders_persona
 import wandb
@@ -102,27 +101,27 @@ def generate_response(personality, history, tokenizer, model, arg):
     return temp_sen
 
 
-def prepare_chatbot(check_point, bt=8, seed=2021):
+def prepare_chatbot(args):
     class ARG:
         def __init__(self):
-            self.dataset_path = "data/personachat_self_original.json"
-            self.dataset_cache = "data/cache_persona_3his"
-            self.history_turn = 3
-            self.history_max_length = 50
-            self.persona_max_length = 30
-            self.device = "cuda:0"
+            self.dataset_path = args.personachat["dataset_path"]
+            self.dataset_cache = args.personachat["dataset_cache"]
+            self.seed = args.personachat["seed"]
+            self.history_turn = args.personachat["history_turn"]
+            self.history_max_length = args.personachat["history_max_length"]
+            self.persona_max_length = args.personachat["persona_max_length"]
+            self.device = args.personachat["device"]
             self.no_sample = False
-            self.max_length = 40
-            self.min_length = 1
-            self.seed = seed
-            self.temperature = 1
-            self.top_k = 0
-            self.top_p = 0
+            self.max_length = args.personachat["max_length"]
+            self.min_length = args.personachat["min_length"]
+            self.temperature = args.personachat["temperature"]
+            self.top_k = args.personachat["top_k"]
+            self.top_p = args.personachat["top_p"]
             self.distributed = False
             self.personality_permutations = 1
             self.local_rank = -1
-            self.train_batch_size = bt
-            self.valid_batch_size = bt
+            self.train_batch_size = args.batch_size
+            self.valid_batch_size = args.batch_size
 
     arg = ARG()
     logging.basicConfig(level=logging.INFO)
@@ -134,8 +133,7 @@ def prepare_chatbot(check_point, bt=8, seed=2021):
 
     logger.info("Get pretrained model and tokenizer")
     tokenizer_class, model_class = (GPT2Tokenizer, GPT2LMHeadModel)
-    # if args.model == 'gpt2' else (OpenAIGPTTokenizer, OpenAIGPTLMHeadModel)
-
+    check_point = os.path.join(args.root, args.gpt2_persona_checkpoint)
     tokenizer = tokenizer_class.from_pretrained(check_point)
     model = model_class.from_pretrained(check_point)
     interlocutor = model_class.from_pretrained(check_point)
@@ -230,43 +228,13 @@ def validation(data_loader, model, interlocutor, tokenizer, bert_tokenizer, ppo,
     return reward_turn_sum
 
 
-def main():
-    parser = ArgumentParser()
-    parser.add_argument("--root", type=str, default=".")
-    parser.add_argument("--gpt2_persona_checkpoint", type=str, default="model/gpt2_persona_model/")
-    parser.add_argument("--save_dir", type=str, default="model/")
-    parser.add_argument("--model_name", type=str, default="engaging")
-
-    # hyper parameters
-    parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--epoch", type=int, default=2)
-    parser.add_argument("--lr_actor", type=float, default=2e-5)
-    parser.add_argument("--lr_critic", type=float, default=2e-4)
-    parser.add_argument("--turn", type=int, default=1)
-    parser.add_argument("--sample_iter", type=int, default=10)
-
-    # ppo
-    parser.add_argument("--K_epochs", type=int, default=3)
-    parser.add_argument("--weight_critic", type=float, default=1.0)
-    parser.add_argument("--weight_entropy", type=float, default=0.05)
-    parser.add_argument("--use_threshold_entropy", type=bool, default=False)
-    parser.add_argument("--threshold_entropy", type=float, default=100.0)
-
-    # steps
-    parser.add_argument("--step_sample", type=int, default=100)
-    parser.add_argument("--step_save", type=int, default=500)
-    parser.add_argument("--step_update", type=int, default=1)
-    parser.add_argument("--step_valid", type=int, default=5)
-
-    args = parser.parse_args()
+def train(args):
     args.model_save_folder = os.path.join(args.root, args.save_dir, args.model_name)
     os.makedirs(args.model_save_folder, exist_ok=True)
     args.sample_file = os.path.join(args.root, f"sample/{args.model_name}.txt")
 
     # ===== prepare dataset, models and optimizer ==========
-    model, interlocutor, tokenizer, arg = prepare_chatbot(
-        os.path.join(args.root, args.gpt2_persona_checkpoint), bt=args.batch_size
-    )
+    model, interlocutor, tokenizer, arg = prepare_chatbot(args)
     train_loader, val_loader, train_sampler, valid_sampler = get_data_loaders_persona(arg, tokenizer)
     del train_sampler, valid_sampler
 
@@ -431,4 +399,48 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = ArgumentParser()
+    parser.add_argument("--root", type=str, default=".")
+    parser.add_argument("--gpt2_persona_checkpoint", type=str, default="model/gpt2_persona_model/")
+    parser.add_argument("--save_dir", type=str, default="model/")
+    parser.add_argument("--model_name", type=str, default="engaging")
+
+    # hyper parameters
+    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--epoch", type=int, default=2)
+    parser.add_argument("--lr_actor", type=float, default=2e-5)
+    parser.add_argument("--lr_critic", type=float, default=2e-4)
+    parser.add_argument("--turn", type=int, default=1)
+    parser.add_argument("--sample_iter", type=int, default=10)
+
+    # ppo
+    parser.add_argument("--K_epochs", type=int, default=3)
+    parser.add_argument("--weight_critic", type=float, default=1.0)
+    parser.add_argument("--weight_entropy", type=float, default=0.05)
+    parser.add_argument("--use_threshold_entropy", type=bool, default=False)
+    parser.add_argument("--threshold_entropy", type=float, default=100.0)
+
+    # steps
+    parser.add_argument("--step_sample", type=int, default=100)
+    parser.add_argument("--step_save", type=int, default=500)
+    parser.add_argument("--step_update", type=int, default=1)
+    parser.add_argument("--step_valid", type=int, default=5)
+
+    args = parser.parse_args()
+    args.personachat = (
+        {
+            "dataset_path": "data/personachat_self_original.json",
+            "dataset_cache": "data/cache_persona_3his",
+            "seed": 0,
+            "history_turn": 3,
+            "history_max_length": 50,
+            "persona_max_length": 30,
+            "device": "cuda:0",
+            "max_length": 20,
+            "min_length": 1,
+            "temperature": 1,
+            "top_k": 0,
+            "top_p": 0,
+        },
+    )
+    train(args)

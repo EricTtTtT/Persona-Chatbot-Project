@@ -47,7 +47,7 @@ class RolloutBuffer:
 
 
 class ActorCritic(nn.Module):
-    def __init__(self, bert_model, persona_pool, state_dim=768, action_dim=6732, action_std_init=0.6):
+    def __init__(self, bert_model, persona_pool):
         super(ActorCritic, self).__init__()
         # bert_model = BertForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=6732)
         self.actor = bert_model
@@ -105,21 +105,17 @@ class PPO:
         self,
         persona_pool,
         bert_model,
-        state_dim=1608,
-        action_dim=6732,
         lr_actor=0.00002,
         lr_critic=0.05,
         gamma=0.99,
-        K_epochs=3,
         eps_clip=0.5,
-        action_std_init=0.3,
         critic_cof=1.0,
         entropy_cof=0.001,
         threshold_entropy=5.0,
+        device="cuda:0",
     ):
         self.gamma = gamma
         self.eps_clip = eps_clip
-        self.K_epochs = K_epochs
         self.tokenizer = None
         self.critic_cof = critic_cof
         self.entropy_cof = entropy_cof
@@ -132,7 +128,7 @@ class PPO:
         self.lr_actor = lr_actor
         self.lr_critic = lr_critic
 
-        self.policy = ActorCritic(bert_model, persona_pool, state_dim, action_dim, action_std_init).to(device)
+        self.policy = ActorCritic(bert_model, persona_pool).to(device)
         self.optimizer = torch.optim.Adam(
             [
                 {"params": self.policy.actor.parameters(), "lr": self.lr_actor},
@@ -140,12 +136,12 @@ class PPO:
             ]
         )
 
-        self.policy_old = ActorCritic(bert_model, persona_pool, state_dim, action_dim, action_std_init).to(device)
+        self.policy_old = ActorCritic(bert_model, persona_pool).to(device)
         self.policy_old.load_state_dict(self.policy.state_dict())
 
         self.MseLoss = nn.MSELoss()
 
-        self.device = "cuda"
+        self.device = device
 
     def set_action_std(self, new_action_std):
 
@@ -250,39 +246,6 @@ class PPO:
 
     def update(self):
         self.policy_old.load_state_dict(self.policy.state_dict())
-
-    # def draw(self):
-
-    #     import matplotlib.pyplot as plt
-
-    #     # plt.plot(self.critic_loss_record, label = "critic loss")
-    #     plt.plot(self.loss_record, label="loss")
-    #     plt.title("Actor loss")
-    #     plt.legend(loc="best")
-    #     plt.savefig(self.output_dir + "/loss.jpg")
-    #     plt.clf()
-
-    #     plt.plot(self.critic_loss_record, label="loss")
-    #     plt.title("Critic loss")
-    #     plt.legend(loc="best")
-    #     plt.savefig(self.output_dir + "/critic_loss.jpg")
-    #     plt.clf()
-
-    #     plt.plot(self.entropy_record, label="entropy")
-    #     plt.title("Entropy")
-    #     plt.legend(loc="best")
-    #     plt.savefig(self.output_dir + "/entropy.jpg")
-    #     plt.clf()
-
-    #     plt.plot(self.reward_record, label=f"reward")
-    #     # plt.title("Reward")
-    #     plt.legend(loc="best")
-    #     plt.title(f"mean = {np.mean(self.reward_record)}, std = {np.std(self.reward_record)}")
-    #     plt.savefig(self.output_dir + "/reward.jpg")
-    #     plt.clf()
-    #     print("Average reward is ", np.mean(self.reward_record))
-    #     print("Std of reward is ", np.std(self.reward_record))
-    #     self.buffer.clear()
 
     def save(self, checkpoint_path):
         torch.save(self.policy_old.state_dict(), checkpoint_path)

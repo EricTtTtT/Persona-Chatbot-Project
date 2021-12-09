@@ -2,7 +2,6 @@ import random
 import numpy as np
 import torch
 
-from sklearn.metrics import classification_report, roc_auc_score
 import torch.nn as nn
 import os
 
@@ -14,7 +13,6 @@ random.seed(1000)
 np.random.seed(1000)
 torch.manual_seed(1000)
 device_1 = torch.device("cuda:1" if torch.cuda.device_count() > 1 else "cuda:0")
-# device_1 = torch.device("cuda:0")
 mlp_hidden_dim = [64, 32, 8]
 epochs = 400
 lr = 0.001
