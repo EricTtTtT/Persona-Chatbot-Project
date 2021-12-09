@@ -248,13 +248,13 @@ def main():
     # ppo
     parser.add_argument("--K_epochs", type=int, default=3)
     parser.add_argument("--weight_critic", type=float, default=1.0)
-    parser.add_argument("--weight_entropy", type=float, default=0.2)
+    parser.add_argument("--weight_entropy", type=float, default=0.05)
     parser.add_argument("--use_threshold_entropy", type=bool, default=False)
     parser.add_argument("--threshold_entropy", type=float, default=100.0)
 
     # steps
-    parser.add_argument("--step_sample", type=int, default=50)
-    parser.add_argument("--step_save", type=int, default=1000)
+    parser.add_argument("--step_sample", type=int, default=100)
+    parser.add_argument("--step_save", type=int, default=500)
     parser.add_argument("--step_update", type=int, default=1)
     parser.add_argument("--step_valid", type=int, default=5)
 
