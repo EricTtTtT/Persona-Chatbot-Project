@@ -1,6 +1,7 @@
-data/
 model/
 sample/
+data/cache*
+data/*.json
 tmp/
 runs/
 __pycache__/

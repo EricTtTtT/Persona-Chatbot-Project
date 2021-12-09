@@ -239,7 +239,7 @@ def train(args):
     del train_sampler, valid_sampler
 
     # persona_pool = remove_duplicate_persona()
-    persona_pool = np.load("./clean_persona.npy")
+    persona_pool = np.load("./data/clean_persona.npy")
     print("shape of persona_pool", np.shape(persona_pool))
 
     bert_model = BertForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=len(persona_pool))
@@ -401,7 +401,7 @@ def train(args):
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--root", type=str, default=".")
-    parser.add_argument("--gpt2_persona_checkpoint", type=str, default="model/gpt2_persona_model/")
+    parser.add_argument("--gpt2_persona_checkpoint", type=str, default="model/gpt2_personachat/")
     parser.add_argument("--save_dir", type=str, default="model/")
     parser.add_argument("--model_name", type=str, default="engaging")
 
@@ -427,20 +427,18 @@ if __name__ == "__main__":
     parser.add_argument("--step_valid", type=int, default=5)
 
     args = parser.parse_args()
-    args.personachat = (
-        {
-            "dataset_path": "data/personachat_self_original.json",
-            "dataset_cache": "data/cache_persona_3his",
-            "seed": 0,
-            "history_turn": 3,
-            "history_max_length": 50,
-            "persona_max_length": 30,
-            "device": "cuda:0",
-            "max_length": 20,
-            "min_length": 1,
-            "temperature": 1,
-            "top_k": 0,
-            "top_p": 0,
-        },
-    )
+    args.personachat = {
+        "dataset_path": "data/personachat_self_original.json",
+        "dataset_cache": "data/cache_persona_3his",
+        "seed": 0,
+        "history_turn": 3,
+        "history_max_length": 50,
+        "persona_max_length": 30,
+        "device": "cuda:0",
+        "max_length": 20,
+        "min_length": 1,
+        "temperature": 1,
+        "top_k": 0,
+        "top_p": 0,
+    }
     train(args)
