@@ -32,5 +32,5 @@ fi
 # TODO: upload engaging classifier model
 if [ ! -f $ENGAGING_CLASSIFIER_MODEL ]; then
     echo "Can't find ${ENGAGING_CLASSIFIER_MODEL}! Extracting from ${ENGAGING_CLASSIFIER_CACHE}"
-    tar zxvf $ENGAGING_CLASSIFIER_CACHE -C $ENGAGING_CLASSIFIER_MODEL
+    tar zxvf $ENGAGING_CLASSIFIER_CACHE -C model
 fi

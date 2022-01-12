@@ -314,7 +314,7 @@ def main():
                 if args.select:
                     persona_s4, log_prob = select_persona(persona_selector, persona_pool, history, bert_tokenizer, bert_model)
                 else:
-                    persona_s4, log_prob = random.sample(persona_pool, args.batch_size), [0 for _ in range(args.batch_size)]
+                    persona_s4, log_prob = (random.sample(persona_pool, args.batch_size), [0 for _ in range(args.batch_size)])
             else:
                 persona_s4, log_prob = persona_s2, [0 for _ in range(args.batch_size)]
             prob_record.append(log_prob)

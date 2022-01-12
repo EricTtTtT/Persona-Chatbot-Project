@@ -34,7 +34,7 @@ def generate_response(personality, history, tokenizer, model, arg):
 
     sequence = [[[bos] + persona_i] + history_i for persona_i, history_i in zip(personality, history)]
     sequence = [
-        [seq[0]] + [[speaker2 if (len(seq) - i) % 2 else speaker1] + s for i, s in enumerate(seq[1:])] for seq in sequence
+        [seq[0]] + [[speaker1 if (len(seq) - i) % 2 else speaker2] + s for i, s in enumerate(seq[1:])] for seq in sequence
     ]
 
     token_type_ids = [[speaker2 if i % 2 else speaker1 for i, s in enumerate(seq) for _ in s] for seq in sequence]
@@ -56,8 +56,8 @@ def generate_response(personality, history, tokenizer, model, arg):
     _, past = model(sequence, attention_mask=mask, token_type_ids=token_type_ids, position_ids=position_ids)
 
     mask_append = torch.LongTensor([[1] for _ in range(len(history))]).to(arg.device)
-    token_tp = torch.LongTensor([[speaker2] if len(x) % 2 else [speaker1] for x in history]).to(arg.device)
-    prev = torch.LongTensor([[speaker2] if len(x) % 2 else [speaker1] for x in history]).to(arg.device)
+    token_tp = torch.LongTensor([[speaker1] if len(x) % 2 else [speaker2] for x in history]).to(arg.device)
+    prev = torch.LongTensor([[speaker1] if len(x) % 2 else [speaker2] for x in history]).to(arg.device)
 
     temp_sen = [[] for i in range(len(history))]
     for i_word in range(arg.max_length):
@@ -104,19 +104,19 @@ def generate_response(personality, history, tokenizer, model, arg):
 def prepare_chatbot(args):
     class ARG:
         def __init__(self):
-            self.dataset_path = args.personachat["dataset_path"]
-            self.dataset_cache = args.personachat["dataset_cache"]
-            self.seed = args.personachat["seed"]
-            self.history_turn = args.personachat["history_turn"]
-            self.history_max_length = args.personachat["history_max_length"]
-            self.persona_max_length = args.personachat["persona_max_length"]
-            self.device = args.personachat["device"]
+            self.dataset_path = args.unicorn["dataset_path"]
+            self.dataset_cache = args.unicorn["dataset_cache"]
+            self.history_turn = args.unicorn["history_turn"]
+            self.history_max_length = args.unicorn["history_max_length"]
+            self.persona_max_length = args.unicorn["persona_max_length"]
+            self.device = args.unicorn["device"]
             self.no_sample = False
-            self.max_length = args.personachat["max_length"]
-            self.min_length = args.personachat["min_length"]
-            self.temperature = args.personachat["temperature"]
-            self.top_k = args.personachat["top_k"]
-            self.top_p = args.personachat["top_p"]
+            self.max_length = args.unicorn["max_length"]
+            self.min_length = args.unicorn["min_length"]
+            self.seed = args.unicorn["seed"]
+            self.temperature = args.unicorn["temperature"]
+            self.top_k = args.unicorn["top_k"]
+            self.top_p = args.unicorn["top_p"]
             self.distributed = False
             self.personality_permutations = 1
             self.local_rank = -1
@@ -239,7 +239,7 @@ def train(args):
     del train_sampler, valid_sampler
 
     # persona_pool = remove_duplicate_persona()
-    persona_pool = np.load("./data/clean_persona.npy")
+    persona_pool = np.load("./clean_persona.npy")
     print("shape of persona_pool", np.shape(persona_pool))
 
     bert_model = BertForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=len(persona_pool))
@@ -265,7 +265,7 @@ def train(args):
 
     # wandb.init(project="persona_chatbot", entity="erictien")
     wandb.init(
-        project="engaging-chatbot",
+        project="engaging-new-gen",
         entity="persona_chatbot_ntuee",
         config={
             "batch_size": args.batch_size,
@@ -401,7 +401,7 @@ def train(args):
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--root", type=str, default=".")
-    parser.add_argument("--gpt2_persona_checkpoint", type=str, default="model/gpt2_personachat/")
+    parser.add_argument("--gpt2_persona_checkpoint", type=str, default="model/gpt2_persona_model/")
     parser.add_argument("--save_dir", type=str, default="model/")
     parser.add_argument("--model_name", type=str, default="engaging")
 
@@ -427,7 +427,7 @@ if __name__ == "__main__":
     parser.add_argument("--step_valid", type=int, default=5)
 
     args = parser.parse_args()
-    args.personachat = {
+    args.unicorn = {
         "dataset_path": "data/personachat_self_original.json",
         "dataset_cache": "data/cache_persona_3his",
         "seed": 0,
@@ -441,4 +441,5 @@ if __name__ == "__main__":
         "top_k": 0,
         "top_p": 0,
     }
+
     train(args)
