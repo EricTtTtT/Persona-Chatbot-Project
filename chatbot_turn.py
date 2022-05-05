@@ -169,7 +169,7 @@ def get_score(history_enc_last_two, tokenizer):
     return score
 
 
-def validation(data_loader, model, interlocutor, tokenizer, bert_tokenizer, ppo, arg, args):
+def validation(data_loader, model, interlocutor, tokenizer, bert_tokenizer, ppo, persona_pool, arg, args):
     print("Validation")
     reward_turn_sum = [0 for i in range(args.turn)]
     coherence_turn_sum = [0 for i in range(args.turn)]
@@ -199,6 +199,8 @@ def validation(data_loader, model, interlocutor, tokenizer, bert_tokenizer, ppo,
                 # get chatbot persona
                 history = [[tokenizer.decode(s) for s in h] for h in history_enc]
                 persona_bot = ppo.select_action(history, bert_tokenizer, valid=True)
+                persona_bot = persona_bot.cpu().detach().numpy()
+                persona_bot = [" ".join(persona_pool[p]) for p in persona_bot]
                 persona_bot_enc = [tokenizer.encode(p) for p in persona_bot]
                 persona_bot_record.append(persona_bot)
 
@@ -261,7 +263,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--epoch", type=int, default=2)
     parser.add_argument("--turn", type=int, default=1)
-    parser.add_argument("--sample_iter", type=int, default=8)
+    parser.add_argument("--sample_iter", type=int, default=5)
     parser.add_argument("--lr_actor", type=float, default=2e-5)
 
     # ppo
@@ -311,7 +313,7 @@ def main():
     # goemotions = MultiLabelPipeline(model=emo_model, tokenizer=emo_tokenizer, threshold=0.3)
 
     ppo = PPO(
-        persona_pool=persona_pool,
+        action_dim=len(persona_pool),
         bert_model=bert_model,
         lr_actor=args.lr_actor,
         lr_critic=args.lr_critic,
@@ -329,7 +331,7 @@ def main():
     )
 
     wandb.init(
-        project="engaging-new-gen",
+        project="engaging_multi_head",
         entity="persona_chatbot_ntuee",
         config={
             "seed": args.seed,
@@ -364,7 +366,7 @@ def main():
         for inter_persona_ori, history_ori, len_p, len_h in tqdm(train_loader):
             if i_batch % args.step_valid == 0:
                 turn_rewards, turn_coherence = validation(
-                    val_loader, model, interlocutor, tokenizer, bert_tokenizer, ppo, arg, args
+                    val_loader, model, interlocutor, tokenizer, bert_tokenizer, ppo, persona_pool, arg, args
                 )
                 record_rewards = {}
                 for i_turn in range(args.turn):
@@ -409,9 +411,8 @@ def main():
                         # get chatbot persona
                         history = [[tokenizer.decode(s) for s in h] for h in history_enc]
                         persona_bot = ppo.select_action(history, bert_tokenizer)
-                        persona_bot = ["".join(p) for p in persona_bot]
-                        print("persona_bot", persona_bot)
-                        exit()
+                        persona_bot = persona_bot.cpu().detach().numpy()
+                        persona_bot = [" ".join(persona_pool[p]) for p in persona_bot]
                         persona_bot_enc = [tokenizer.encode(p) for p in persona_bot]
                         persona_bot_record.append(persona_bot)
 
@@ -491,6 +492,7 @@ def main():
 
             if i_batch % args.step_save == 0:
                 torch.save(ppo.policy, os.path.join(args.model_save_folder, "model.bin"))
+                wandb.save(os.path.join(args.model_save_folder, "model.bin"))
 
             i_batch += 1
 

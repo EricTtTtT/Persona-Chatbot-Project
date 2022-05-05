@@ -1,33 +1,12 @@
 from turtle import forward
 import torch
 import torch.nn as nn
-from torch.distributions import MultivariateNormal
 from torch.distributions import Categorical
-from transformers import BertForSequenceClassification
 import torch.nn.functional as F
 import numpy as np
 import os
 
-################################## set device ##################################
-
-print("============================================================================================")
-
-
-# set device to cpu or cuda
-device = torch.device("cpu")
-
-if torch.cuda.is_available():
-    device = torch.device("cuda:0")
-    torch.cuda.empty_cache()
-    print("Device set to : " + str(torch.cuda.get_device_name(device)))
-else:
-    print("Device set to : cpu")
-
-print("============================================================================================")
-
-
 ################################## PPO Policy ##################################
-
 
 class RolloutBuffer:
     def __init__(self):
@@ -51,7 +30,7 @@ class RolloutBuffer:
 
 class ActorCritic(nn.Module):
     def __init__(
-        self, bert_model, persona_pool, state_dim=768, action_dim=6732, action_std_init=0.6
+        self, bert_model, state_dim=768, action_dim=6732, action_std_init=0.6
     ):
         super(ActorCritic, self).__init__()
 
@@ -62,8 +41,7 @@ class ActorCritic(nn.Module):
         self.actor3 = nn.Linear(state_dim, action_dim)
         self.actor4 = nn.Linear(state_dim, action_dim)
 
-
-        self.critic = nn.Linear(768, 1)
+        self.critic = nn.Linear(state_dim, 1)
         
         self.bert_model.eval()
         self.actor1.eval()
@@ -72,7 +50,6 @@ class ActorCritic(nn.Module):
         self.actor4.eval()
 
         self.critic.eval()
-        self.persona_pool = persona_pool
 
     def set_action_std(self, new_action_std):
 
@@ -85,32 +62,33 @@ class ActorCritic(nn.Module):
 
     def act(self, **state):
         output = self.bert_model.bert(**state)[1]
-        # probs = [self.actor1(output), self.actor2(output), self.actor3(output), self.actor4(output)]
-        prob = self.actor1(output)
-        dist = Categorical(prob)
+        probs = [F.softmax(self.actor1(output), dim=-1),
+                F.softmax(self.actor2(output), dim=-1),
+                F.softmax(self.actor3(output), dim=-1),
+                F.softmax(self.actor4(output), dim=-1)]
+        probs = torch.stack(probs, dim=1)
+        dist = Categorical(probs)
+        action = dist.sample()
+        logprob = dist.log_prob(action)
+        logprob = torch.mean(logprob, dim=1)
 
-        # persona_id = dist1.sample()
-        persona_id = dist.sample()
-        logprob = dist.log_prob(persona_id)
-
-        # action = [self.persona_pool[id] for id in persona_id.cpu().detach().numpy()]
-        action = [self.persona_pool[id] for id in persona_id.cpu().detach().numpy()]
-        print("action : ", action)
-        input("press enter to continue")
-        return action, logprob, persona_id
-        # return action.detach(), action_logprob.detach()
+        return action, logprob
 
     def evaluate(self, action, **state):
 
-        output = self.bert_model.bert(**state)
-        state_values = self.critic(output[1])
+        output = self.bert_model.bert(**state)[1]
+        state_values = self.critic(output)
 
-        output = self.actor1(output[1])
-
-        action_probs = F.softmax(output, dim=-1)
-        dist = Categorical(action_probs)
+        probs = [F.softmax(self.actor1(output), dim=-1),
+                F.softmax(self.actor2(output), dim=-1),
+                F.softmax(self.actor3(output), dim=-1),
+                F.softmax(self.actor4(output), dim=-1)]
+        probs = torch.stack(probs, dim=1)
+        dist = Categorical(probs)
         logprob = dist.log_prob(action)
+        logprob = torch.mean(logprob, dim=1)
         dist_entropy = dist.entropy()
+        dist_entropy = torch.mean(dist_entropy, dim=1)
 
         return logprob, state_values, dist_entropy
 
@@ -118,7 +96,7 @@ class ActorCritic(nn.Module):
 class PPO:
     def __init__(
         self,
-        persona_pool,
+        action_dim,
         bert_model,
         state_dim=768,
         lr_actor=0.0002,
@@ -138,7 +116,7 @@ class PPO:
         load=False,
         load_path="",
     ):
-
+        self.device = "cuda"
         self.gamma = gamma
         self.eps_clip = eps_clip
         self.K_epochs = K_epochs
@@ -157,12 +135,11 @@ class PPO:
         print("lr critic is ", lr_critic)
         print("**********************************************")
 
-        action_dim = len(persona_pool)
-        self.policy = ActorCritic(bert_model, persona_pool, state_dim, action_dim, action_std_init).to(
-            device
+        self.policy = ActorCritic(bert_model, state_dim, action_dim, action_std_init).to(
+            self.device
         )
-        self.policy_old = ActorCritic(bert_model, persona_pool, state_dim, action_dim, action_std_init).to(
-            device
+        self.policy_old = ActorCritic(bert_model, state_dim, action_dim, action_std_init).to(
+            self.device
         )
         if self.load:
             print("Load ", load_path)
@@ -172,6 +149,7 @@ class PPO:
             self.policy_old.load_state_dict(self.policy.state_dict())
         self.optimizer = torch.optim.Adam(
             [
+                # {"params": self.policy.bert_model.parameters(), "lr": lr_critic},
                 {"params": self.policy.actor1.parameters(), "lr": lr_actor},
                 {"params": self.policy.actor2.parameters(), "lr": lr_actor},
                 {"params": self.policy.actor3.parameters(), "lr": lr_actor},
@@ -183,7 +161,6 @@ class PPO:
         self.loss = 0
         self.MseLoss = nn.MSELoss()
 
-        self.device = "cuda"
         self.loss_record = []
         self.critic_loss_record = []
         self.entropy_record = []
@@ -196,8 +173,8 @@ class PPO:
         print("--------------------------------------------------------------------------------------------")
 
     def decay_action_std(self, action_std_decay_rate, min_action_std):
-        print("--------------------------------------------------------------------------------------------")
 
+        print("--------------------------------------------------------------------------------------------")
         print("WARNING : Calling PPO::decay_action_std() on discrete action space policy")
         print("--------------------------------------------------------------------------------------------")
 
@@ -222,12 +199,12 @@ class PPO:
             return_tensors="pt",
         ).to(self.device)
         # with torch.no_grad():
-        action, action_logprob, persona_id = self.policy_old.act(**encode_input)
+        action, action_logprob = self.policy_old.act(**encode_input)
 
         # All of them are one batch [a1, a2, ..., a16], [logp1, logp2, ...., logp16]
         if not valid:
             self.buffer.states.append(history_sentences)
-            self.buffer.actions.append(persona_id)
+            self.buffer.actions.append(action)
             self.buffer.logprobs.append(action_logprob)
 
         return action
@@ -267,9 +244,18 @@ class PPO:
                 # not reduce previous rewards
                 rewards.append(self.buffer.rewards[j][i])
                 coherence.append(self.buffer.coherence[j][i])
-                logprobs.append(self.buffer.logprobs[j][i][k])
-                actions.append(self.buffer.actions[j][i][k])
+                logprobs.append(self.buffer.logprobs[j][i])
+                actions.append(self.buffer.actions[j][i])
                 states.append(self.buffer.states[j][i])
+        
+        # print("--------------------------------------------------------------------------------------------")
+        # print("rewards is ", rewards)
+        # print("coherence is ", coherence)
+        # print("logprobs is ", logprobs)
+        # print("actions is ", actions)
+        # print("states is ", states)
+        # print("--------------------------------------------------------------------------------------------")
+        # input("Press any key to continue...")
 
         # Normalizing the rewards
         record_reward = np.mean(rewards)
@@ -284,8 +270,8 @@ class PPO:
         rewards = (rewards - mean) / (rewards.std() + 1e-7) + mean
 
         rewards = torch.add(coherence * self.coherence_cof, rewards) / (self.coherence_cof + 1)
-        actions = torch.tensor(actions).to(self.device)
         logprobs = torch.tensor(logprobs, requires_grad=True)
+        actions = torch.stack(actions, dim=0)
 
         new_logprobs, state_values, dist_entropy = self.evaluate(states, actions)
 
